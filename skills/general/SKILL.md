@@ -3,6 +3,10 @@ name: general
 description: General coding rules and principles for all projects
 ---
 
+# Generale behaviour
+
+- **NEVER print environement variables directly** 
+
 # General Coding Principles - Agent Usage Guide
 
 ## Core Philosophy
@@ -365,6 +369,7 @@ Task: Create new Python project
 | Create diagrams | mermaid | - |
 | Use OpenAI API | openai | python |
 | Control tmux | tmux | - |
+| Spawn sub-agents | pi-spawn | tmux, general |
 
 ## Common Anti-Patterns to Avoid
 
@@ -464,3 +469,4 @@ Read specific skill files for detailed guidance:
 - **GitLab CLI**: [glab](../glab/SKILL.md)
 - **AI/ML**: [langgraph](../langgraph/SKILL.md), [openai](../openai/SKILL.md)
 - **Utilities**: [gitignore](../gitignore/SKILL.md), [mermaid](../mermaid/SKILL.md), [tmux](../tmux/SKILL.md)
+- **Agent Management**: [pi-spawn](../pi-spawn/SKILL.md)
