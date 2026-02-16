@@ -18,6 +18,7 @@ description: Comprehensive guide for Python development with modern tooling
 - [Examples](references/examples.md) - FastAPI, Click, Settings patterns
 - [Code Review](references/code-review.md) - PEP8 compliance, type hints, anti-patterns
 - [Code Style](references/codestyle.md) - PEP8 and PEP20 detailed guidelines
+- [Security](reference/security.md) - Code analysys with focus on security
 
 ## Core Principles for Python Code
 

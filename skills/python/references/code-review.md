@@ -57,6 +57,9 @@ When activated, this skill provides:
    - Check for return value documentation
    - Assess example usage in docstrings
 
+7. **Security***
+    - use tools at your disposition to analyze the code for security issues (ex: bandit, semgrep, ...)
+
 ## Usage
 
 This skill activates automatically when:

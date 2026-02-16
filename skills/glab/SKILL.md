@@ -23,11 +23,12 @@ description: Guide for using glab cli tool to interact with gitlab
 - **Create issue**: `glab issue create`
 - **Close issue**: `glab issue close <IID>`
 
-### When user asks about Pipelines:
-- **List pipelines**: `glab pipeline list`
-- **View pipeline**: `glab pipeline view <PIPELINE_ID>`
-- **Retry pipeline**: `glab pipeline retry <PIPELINE_ID>`
-- **Pipeline status**: `glab pipeline status`
+### When user asks about Pipelines/CI:
+- **List pipelines**: `glab pipeline list` or `glab ci list`
+- **View pipeline status**: `glab pipeline status` or `glab ci status`
+- **Retry pipeline**: `glab pipeline retry <PIPELINE_ID>` or `glab ci retry <PIPELINE_ID>`
+- **View job trace/logs**: `glab ci trace <JOB_ID>` (most reliable for logs)
+- **Get pipelines for MR**: Use GraphQL API (see Pipeline & CI Jobs section below)
 
 ### When user asks about Projects/Repos:
 - **List projects**: `glab project list`
@@ -101,12 +102,65 @@ glab issue view <IID>
 ```bash
 # Recent pipelines for current repo
 glab pipeline list
-
-# View specific pipeline
-glab pipeline view <PIPELINE_ID>
+# or
+glab ci list
 
 # Check current branch pipeline status
 glab pipeline status
+# or
+glab ci status
+```
+
+### Viewing Pipeline & CI Jobs
+```bash
+# IMPORTANT: glab pipeline view <ID> and glab ci view <ID> are unreliable
+# Use GraphQL API instead for pipeline details
+
+# Get pipelines for a specific MR
+glab api graphql -f query='
+query {
+  project(fullPath: "owner/repo-name") {
+    mergeRequest(iid: "42") {
+      pipelines {
+        nodes {
+          id
+          iid
+          status
+          createdAt
+        }
+      }
+    }
+  }
+}'
+
+# Get pipeline details with jobs
+glab api graphql -f query='
+query {
+  project(fullPath: "owner/repo-name") {
+    pipeline(iid: "123") {
+      id
+      status
+      createdAt
+      jobs {
+        nodes {
+          id
+          name
+          status
+          webPath
+        }
+      }
+    }
+  }
+}' | jq
+
+# View job logs/trace (this is the most reliable way)
+glab ci trace <JOB_ID>
+
+# Example: Extract job ID from GraphQL then get logs
+# Step 1: Get jobs from pipeline
+glab api graphql -f query='...' | jq -r '.data.project.pipeline.jobs.nodes[] | select(.status=="FAILED") | .id'
+# Step 2: Extract numeric ID and get trace
+glab ci trace 160208907
 ```
 
 ### Listing Projects
@@ -125,7 +179,7 @@ When you need custom fields, complex queries, or features not in high-level comm
 # Get project ID first (often needed)
 glab repo view --json | jq -r '.id'
 
-# Call API endpoint
+# Call REST API endpoint
 glab api "projects/:id/merge_requests?state=opened" --method GET
 
 # With pagination
@@ -134,6 +188,68 @@ glab api "projects/:id/issues?per_page=100&page=2" --method GET
 # POST/PUT/DELETE operations
 glab api "projects/:id/merge_requests/<IID>/approve" --method POST
 ```
+
+### GraphQL API (Preferred for Complex Queries)
+GraphQL is more reliable for pipelines, jobs, and detailed MR information:
+
+```bash
+# Basic GraphQL query structure
+glab api graphql -f query='
+query {
+  project(fullPath: "owner/repo-name") {
+    # Your query here
+  }
+}'
+
+# Get MR with pipeline information
+glab api graphql -f query='
+query {
+  project(fullPath: "owner/repo-name") {
+    mergeRequest(iid: "42") {
+      title
+      sourceBranch
+      targetBranch
+      pipelines(first: 10) {
+        nodes {
+          id
+          iid
+          status
+          createdAt
+        }
+      }
+    }
+  }
+}'
+
+# Get pipeline with jobs
+glab api graphql -f query='
+query {
+  project(fullPath: "owner/repo-name") {
+    pipeline(iid: "123") {
+      id
+      status
+      createdAt
+      jobs {
+        nodes {
+          id
+          name
+          status
+          webPath
+        }
+      }
+    }
+  }
+}'
+
+# Pipe to jq for processing
+glab api graphql -f query='...' | jq '.data.project.mergeRequest.pipelines.nodes[0]'
+```
+
+**Important Notes:**
+- Use `fullPath: "owner/repo-name"` format (not numeric IDs)
+- Use `iid` (internal ID) for MRs and pipelines, not `id`
+- GraphQL `id` returns format like `gid://gitlab/Ci::Build/160208907` - extract numeric part for `glab ci trace`
+- Always validate GraphQL field selections (e.g., `stage` is an object, needs `{ name }` not just `stage`)
 
 ## Output Control
 
@@ -175,10 +291,31 @@ glab mr list --repo owner/project-name
   - Add `--repo owner/project` flag
 
 ### "Error: 404 Not Found"
-→ Check IID/ID is correct, or you lack permissions
+→ Common causes:
+  - Check IID/ID is correct
+  - Verify you have permissions
+  - **For pipelines**: Use GraphQL API instead of `glab pipeline view`
+  - **For REST API**: Ensure proper URL encoding for project paths (use `%2F` for `/`)
+
+### "Unknown flag: --xyz"
+→ Flag doesn't exist. Common mistakes:
+  - `--with-links` doesn't exist on `glab mr view`
+  - `--merge-request` doesn't exist on `glab ci list`
+  - `--pipeline-id` doesn't exist on `glab ci status`
+  - Check `glab <command> --help` for actual flags
 
 ### Missing data fields in output
-→ Switch to `glab api <endpoint>` for full JSON response
+→ Switch to `glab api <endpoint>` for full JSON response or use GraphQL
+
+### GraphQL errors: "Field must have selections"
+→ Some fields are objects requiring nested selection:
+```bash
+# Wrong:
+stage
+
+# Correct:
+stage { name }
+```
 
 ### Rate limiting
 → Use pagination: `&per_page=20&page=1` in API calls
@@ -207,11 +344,55 @@ glab api --help
 ## Typical Agent Workflow
 
 1. **Understand user intent** → Map to resource type (MR/issue/pipeline)
-2. **Choose command level** → High-level `glab <resource>` or low-level `glab api`
+2. **Choose command level**:
+   - Simple queries: Use high-level `glab <resource>` commands
+   - Pipeline/job details: Use GraphQL API with `glab api graphql`
+   - Job logs: Use `glab ci trace <JOB_ID>`
 3. **Add filters** → State, author, labels as needed
-4. **Execute command** → Use `run_in_terminal`
-5. **Parse output** → JSON preferred for programmatic use
-6. **Handle errors** → Auth issues, repo context, permissions
+4. **Execute command** → Use bash tool
+5. **Parse output** → JSON preferred for programmatic use (pipe to `jq`)
+6. **Handle errors** → Auth issues, repo context, permissions, missing flags
+
+### Example: Getting Pipeline Logs for an MR
+
+```bash
+# Step 1: Get the source branch from MR
+glab api graphql -f query='
+query {
+  project(fullPath: "owner/repo") {
+    mergeRequest(iid: "42") {
+      sourceBranch
+      pipelines(first: 1) {
+        nodes {
+          iid
+          status
+        }
+      }
+    }
+  }
+}'
+
+# Step 2: Get pipeline jobs
+glab api graphql -f query='
+query {
+  project(fullPath: "owner/repo") {
+    pipeline(iid: "123") {
+      jobs {
+        nodes {
+          id
+          name
+          status
+        }
+      }
+    }
+  }
+}' | jq -r '.data.project.pipeline.jobs.nodes[] | "\(.id) \(.name) \(.status)"'
+
+# Step 3: Extract job ID and get logs
+# From GraphQL id like "gid://gitlab/Ci::Build/160208907"
+# Extract just the number: 160208907
+glab ci trace 160208907
+```
 
 ## Quick Reference Card
 
@@ -219,8 +400,30 @@ glab api --help
 |-----------|-----------------|
 | List open MRs | `glab mr list --state opened` |
 | View MR #42 | `glab mr view 42` |
+| Get MR branch | `glab api graphql -f query='...'` (see GraphQL section) |
+| Get MR pipelines | `glab api graphql` (see Example workflow) |
+| List pipelines | `glab pipeline list` or `glab ci list` |
+| View job logs | `glab ci trace <JOB_ID>` |
 | List my issues | `glab issue list --author @me` |
-| Recent pipelines | `glab pipeline list` |
-| Custom API query | `glab api "endpoint"` |
+| Custom API query | `glab api "endpoint"` or `glab api graphql` |
 | Check auth | `glab auth status` |
+
+## Common Pitfalls to Avoid
+
+1. **Don't use** `glab pipeline view <ID>` or `glab ci view <ID>` - they're unreliable (404 errors)
+   - **Use instead**: GraphQL API for pipeline details
+   
+2. **Don't use** non-existent flags like `--with-links`, `--merge-request`, `--pipeline-id`
+   - **Always check**: `glab <command> --help` first
+
+3. **Don't forget** to extract numeric ID from GraphQL `id` fields
+   - GraphQL returns: `gid://gitlab/Ci::Build/160208907`
+   - You need: `160208907` for `glab ci trace`
+
+4. **Don't use** numeric project IDs in GraphQL
+   - **Use**: `fullPath: "owner/repo-name"` format instead
+
+5. **Don't query** object fields without nested selections in GraphQL
+   - Wrong: `stage`
+   - Correct: `stage { name }`
 
