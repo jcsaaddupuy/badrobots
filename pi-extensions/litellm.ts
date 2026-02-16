@@ -61,7 +61,9 @@ function getParameterSupport(modelId: string): ParameterSupport {
   if (modelId.includes("claude")) {
     return { store: true, prompt_cache_key: false };
   }
-
+  if (modelId.includes("qwen3")) {
+    return { store: true, prompt_cache_key: false };
+  }
   // Gemini models - Databricks doesn't support prompt_cache_key
   if (modelId.includes("gemini")) {
     return { store: true, prompt_cache_key: false };
