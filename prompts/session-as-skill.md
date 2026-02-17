@@ -1,12 +1,12 @@
 ---
 description: Improve skills from actual work
 ---
-# Create/Update Skill from Session Work
+# Update Skill from Session Work
 
 Review and understand the work you have done in the current session.
-Pay attention to the problems you have solved or the task you have done.
+If the skill you where using was not sufficient, improve it with your new knowledge.
 
-Either create a new skill or update exising one with the new knowledge.
+Pay attention to the problems you have solved or the task you have done.
 Pay attention to extract the generic steps that can be reproduced in other contexts, and the specifics ones.
 
 
@@ -19,10 +19,9 @@ Pay attention to extract the generic steps that can be reproduced in other conte
 
 2. **Extract knowledge**
     - Generic patterns (reusable anywhere)
-    - Specific examples (concrete use cases)
     - Best practices and pitfalls
 
-3. **Create new skill OR update existing**
+3. **Update existing**
     - New: distinct tool/topic
     - Update: enhances existing skill
 
