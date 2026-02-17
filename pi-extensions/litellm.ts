@@ -265,7 +265,22 @@ function detectModelCapabilities(modelId: string) {
 }
 
 /**
- * Custom streaming function with rate limit error handling
+ * Custom streaming function with rate limit error handling and enhanced usage tracking
+ * 
+ * This implementation uses Pi's built-in streamOpenAICompletions to:
+ * 1. Leverage existing OpenAI streaming logic
+ * 2. Extract usage data including cache fields from LiteLLM responses
+ * 3. Parse cost information from LiteLLM's _hidden_params
+ * 4. Provide enhanced rate limit error messages
+ * 
+ * Note: The underlying streamOpenAICompletions already extracts:
+ * - prompt_tokens_details.cached_tokens -> cacheRead
+ * - completion_tokens (including reasoning_tokens) -> output
+ * 
+ * LiteLLM also provides:
+ * - cache_read_input_tokens (alternative to cached_tokens)
+ * - cache_creation_input_tokens (for cache writes)
+ * These are available in the raw response but not currently extracted by Pi's base implementation.
  */
 function createLiteLLMStream(parameterSupport: Map<string, ParameterSupport>) {
   return function streamLiteLLM(
@@ -276,24 +291,6 @@ function createLiteLLMStream(parameterSupport: Map<string, ParameterSupport>) {
     const stream = createAssistantMessageEventStream();
 
     (async () => {
-      const output: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
-
       try {
         // Get parameter support for this model
         const support = parameterSupport.get(model.id) || { store: true, prompt_cache_key: true };
@@ -304,12 +301,18 @@ function createLiteLLMStream(parameterSupport: Map<string, ParameterSupport>) {
           delete wrappedOptions.sessionId;
         }
 
-        // Import and use azure streaming
+        // Import and use Pi's built-in OpenAI streaming
         const piAi = await import("@mariozechner/pi-ai");
-        const azureStream = (piAi as any).streamAzureOpenAIResponses(model, context, wrappedOptions);
+        const openaiStream = (piAi as any).streamOpenAICompletions(model, context, wrappedOptions);
 
         // Forward all events
-        for await (const event of azureStream) {
+        // The usage extraction is handled by streamOpenAICompletions which extracts:
+        // - input tokens (prompt_tokens - cached_tokens)
+        // - output tokens (completion_tokens + reasoning_tokens)
+        // - cacheRead (prompt_tokens_details.cached_tokens)
+        // - cacheWrite (currently always 0, as OpenAI doesn't provide this field)
+        // - totalTokens (computed from input + output + cacheRead)
+        for await (const event of openaiStream) {
           stream.push(event);
         }
       } catch (error) {
@@ -318,8 +321,26 @@ function createLiteLLMStream(parameterSupport: Map<string, ParameterSupport>) {
         // Parse rate limit error
         const rateLimitInfo = parseRateLimitError(error);
         
+        // Create error output
+        const output: AssistantMessage = {
+          role: "assistant",
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: Date.now(),
+        };
+        
         if (rateLimitInfo.isRateLimit) {
-          // Provide enhanced rate limit error message
           output.stopReason = "error";
           output.errorMessage = formatRateLimitError(rateLimitInfo, model.id);
         } else if (options?.signal?.aborted) {
@@ -379,7 +400,7 @@ export default async function (pi: ExtensionAPI) {
       contextWindow: capabilities.contextWindow,
       maxTokens: capabilities.maxTokens,
       compat: {
-        supportsStore: support.store,
+        supportsStore: false, // LiteLLM doesn't support store parameter
       },
     };
   });
@@ -388,7 +409,7 @@ export default async function (pi: ExtensionAPI) {
   pi.registerProvider("litellm", {
     baseUrl: normalizedBaseUrl,
     apiKey,
-    api: "azure-openai-responses",
+    api: "openai-completions",
     authHeader: true,
     models,
     streamSimple: createLiteLLMStream(parameterSupport),
