@@ -381,6 +381,94 @@ gitGraph
     commit type: HIGHLIGHT
 ```
 
+## Debugging Common Errors
+
+### Error: "Expecting: one of these possible Token sequences... but found: 'message'"
+
+**Cause**: Attempting to use a `message` attribute. GitGraph doesn't support separate message fields.
+
+**Problem:**
+```mermaid
+gitGraph
+    commit id: "08a4682" message: "Configure Renovate"  # ❌ WRONG
+```
+
+**Solution**: Include messages in the `id` field using format `"hash: description"`:
+```mermaid
+gitGraph
+    commit id: "08a4682: Configure Renovate"  # ✅ CORRECT
+    commit id: "775236c: Update dependencies"
+    commit id: "31fcb2f: Fix linting issues"
+```
+
+**Tips:**
+- Keep messages concise (40-60 characters total)
+- Use imperative mood: "Add feature" not "Added feature"
+- Avoid quotes and multiple colons in messages
+- For tickets: `"PROJ-202: Implement feature"`
+
+### Error: "Cannot merge branch 'X' into itself"
+
+**Cause**: Duplicate commit IDs or not checking out the target branch before merging.
+
+**Problem:**
+```mermaid
+gitGraph
+    commit id: "A"
+    branch feature
+    checkout feature
+    commit id: "B"
+    checkout main
+    merge feature
+    commit id: "B"  # ❌ Duplicate ID
+```
+
+**Solution**: Ensure unique IDs and explicit branch checkout:
+```mermaid
+gitGraph
+    commit id: "A"
+    branch feature
+    checkout feature
+    commit id: "B"
+    checkout main
+    merge feature
+    commit id: "C"  # ✅ Unique ID
+```
+
+### Error: "Commits on wrong branch"
+
+**Cause**: Adding commits after branching without explicit checkout.
+
+**Problem:**
+```mermaid
+gitGraph
+    commit id: "1"
+    branch develop
+    commit id: "2"  # ❌ Which branch?
+    checkout main
+    merge develop
+```
+
+**Solution**: Always checkout before adding commits:
+```mermaid
+gitGraph
+    commit id: "1"
+    branch develop
+    checkout develop
+    commit id: "2"  # ✅ Explicitly on develop
+    checkout main
+    merge develop
+```
+
+### Quick Debugging Checklist
+
+- [ ] All commit IDs are unique across all branches
+- [ ] Each branch is explicitly checked out before commits
+- [ ] Merges happen from the target branch (checkout first)
+- [ ] No `message` attribute (use `id: "hash: message"` instead)
+- [ ] No duplicate branch names
+- [ ] No commits after merge without explicit checkout
+
 ## Best Practices
 
 ### Branch Strategy
@@ -491,4 +579,30 @@ gitGraph
     cherry-pick id: "C" parent: "B"
     checkout main
     merge hotfix tag: "v1.0.1"
+```
+
+### Complex History with Descriptive Messages
+```mermaid
+gitGraph
+    commit id: "08a4682: Configure Renovate"
+    commit id: "775236c: Update dependencies"
+    commit id: "31fcb2f: Fix linting issues"
+    branch fix/http-errors
+    checkout fix/http-errors
+    commit id: "e7cf9b4: Fix HTTP transient errors" type: HIGHLIGHT
+    checkout main
+    merge fix/http-errors
+    commit id: "e357315: Release v1.2.1"
+    branch develop
+    checkout develop
+    commit id: "94e95af: Add model support"
+    commit id: "273aea0: Implement registry"
+    branch PROJ-202
+    checkout PROJ-202
+    commit id: "7ec9d1c: Start feature work"
+    commit id: "23f54a6: Generate indexes" type: HIGHLIGHT tag: "HEAD"
+    checkout develop
+    merge PROJ-202 tag: "v1.3"
+    checkout main
+    merge develop tag: "v1.3-release"
 ```
