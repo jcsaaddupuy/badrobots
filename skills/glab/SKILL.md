@@ -394,6 +394,99 @@ query {
 glab ci trace 160208907
 ```
 
+### Working with GitLab Wikis
+
+GitLab wikis are Git repositories that can be cloned and managed like code. There's no dedicated `glab wiki` command, but you can interact with wikis using the API and Git.
+
+#### Listing Wiki Pages
+```bash
+# List all wiki pages for a project
+glab api "projects/:fullpath/wikis"
+
+# With URL encoding for project path
+glab api "projects/some-org%2Fapps%2Fsome-folder%2Flanggraph%2Fsome-project/wikis"
+
+# Get specific wiki page content
+glab api "projects/:fullpath/wikis/page-slug"
+
+# Example: Get page content as JSON
+glab api "projects/:fullpath/wikis/ARCHITECTURE.md" | jq -r '.content'
+```
+
+#### Cloning Wiki Repository
+```bash
+# Wiki repo URL pattern: <project-url>.wiki.git
+# Example for project: git@gitlab.com:owner/project.git
+# Wiki would be:       git@gitlab.com:owner/project.wiki.git
+
+# Clone wiki alongside project
+git clone git@gitlab.org:owner/project.wiki.git ~/src/path/to/project.wiki
+
+# Standard structure recommendation:
+# ~/src/gitlab.com/owner/project      <- code repository
+# ~/src/gitlab.com/owner/project.wiki <- wiki repository
+```
+
+#### Managing Wiki Pages via Git
+
+You may pull and commit, but never push.
+
+```bash
+# After cloning wiki repo
+cd ~/src/path/to/project.wiki
+
+# Create/edit pages (markdown files)
+echo "# New Page" > New-Page.md
+
+# Commit
+git add New-Page.md
+git commit -m "Add new page"
+
+# Never push directly
+
+# Pull latest changes
+git pull origin master
+```
+
+#### Creating/Updating Wiki Pages via API
+```bash
+# Create a new wiki page
+glab api "projects/:fullpath/wikis" \
+  --method POST \
+  --field title="Page Title" \
+  --field content="# Page Content" \
+  --field format="markdown"
+
+# Update existing wiki page
+glab api "projects/:fullpath/wikis/page-slug" \
+  --method PUT \
+  --field content="# Updated Content" \
+  --field format="markdown"
+
+# Delete wiki page
+glab api "projects/:fullpath/wikis/page-slug" --method DELETE
+```
+
+#### Best Practices for Wiki Management
+
+**When to use Git clone approach:**
+- Writing multiple pages or large documentation
+- Need local editing with your preferred editor
+- Want version control workflow (branches, reviews)
+- Batch operations on multiple pages
+
+**When to use API approach:**
+- Quick single-page updates
+- Automated documentation generation
+- Reading wiki content programmatically
+- Listing available pages
+
+**Recommended workflow for documentation generation:**
+1. Clone wiki repo alongside code repo: `project/` and `project.wiki/`
+2. Write markdown files directly to wiki repo
+3. Commit and push changes
+4. Wiki pages appear immediately on GitLab
+
 ## Quick Reference Card
 
 | User wants | Command pattern |
@@ -405,6 +498,9 @@ glab ci trace 160208907
 | List pipelines | `glab pipeline list` or `glab ci list` |
 | View job logs | `glab ci trace <JOB_ID>` |
 | List my issues | `glab issue list --author @me` |
+| List wiki pages | `glab api "projects/:fullpath/wikis"` |
+| Get wiki page content | `glab api "projects/:fullpath/wikis/page-slug"` |
+| Clone wiki repo | `git clone <project-url>.wiki.git path.wiki` |
 | Custom API query | `glab api "endpoint"` or `glab api graphql` |
 | Check auth | `glab auth status` |
 
