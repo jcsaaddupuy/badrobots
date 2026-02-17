@@ -1,3 +1,6 @@
+---
+description: Analyze project an provide a summary
+---
 # Session Prompt: Generate Project Architecture Documentation
 
 ## Objective

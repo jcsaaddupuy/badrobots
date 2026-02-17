@@ -1,3 +1,6 @@
+---
+description: Improve skills from actual work
+---
 # Create/Update Skill from Session Work
 
 Review and understand the work you have done in the current session.
