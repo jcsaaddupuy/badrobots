@@ -1,21 +1,22 @@
 /**
  * LiteLLM Provider Extension for Pi
  * 
- * This extension registers a LiteLLM proxy as a provider, automatically discovering
- * available models and handling parameter compatibility issues.
+ * This extension registers a LiteLLM proxy as a provider with intelligent
+ * error handling for Databricks Foundation Model API rate limits.
  * 
  * Environment Variables:
  * - OPENAI_BASE_URL: Base URL of the LiteLLM proxy (e.g., https://llm.example.com)
  * - OPENAI_API_KEY: API key for the LiteLLM proxy
  * 
- * Parameter Compatibility:
- * Different backend providers have different parameter support:
- * - Claude models (Databricks): store=yes, prompt_cache_key=no
- * - Gemini models (Databricks): store=yes, prompt_cache_key=no
- * - GPT models: store=yes, prompt_cache_key=yes
- * - Others: Assume full support (fail-open)
+ * Rate Limiting Strategy (Databricks Best Practices):
+ * - Sets appropriate max_tokens to avoid over-reserving output capacity
+ * - Parses structured rate limit errors from API responses
+ * - Provides actionable error messages with retry guidance
+ * - Extracts retry_after from error responses when available
  * 
- * The extension automatically filters unsupported parameters to prevent API errors.
+ * Parameter Compatibility:
+ * - Databricks models: No prompt_cache_key support
+ * - Other providers: Full parameter support
  * 
  * Usage:
  *   pi --provider litellm --model claude-opus-4-6 -p "your prompt"
@@ -48,39 +49,144 @@ interface ParameterSupport {
   prompt_cache_key: boolean;
 }
 
+interface RateLimitError {
+  isRateLimit: boolean;
+  limitType?: string;
+  limit?: number;
+  current?: number;
+  retryAfter?: number;
+  message?: string;
+}
+
 /**
- * Detect parameter support based on model name patterns.
- * Based on actual testing:
- * - Claude models (Databricks backend): store=true, prompt_cache_key=false
- * - GPT models: store=true, prompt_cache_key=true
- * - Gemini models (Databricks backend): store=true, prompt_cache_key=false
- * - Other models: assume both supported (fail-open)
+ * Detect parameter support - conservative approach for Databricks
  */
 function getParameterSupport(modelId: string): ParameterSupport {
-  // Claude models - Databricks doesn't support prompt_cache_key
-  if (modelId.includes("claude")) {
-    return { store: true, prompt_cache_key: false };
-  }
-  if (modelId.includes("qwen3")) {
-    return { store: true, prompt_cache_key: false };
-  }
-  // Gemini models - Databricks doesn't support prompt_cache_key
-  if (modelId.includes("gemini")) {
-    return { store: true, prompt_cache_key: false };
+  // All known Databricks-proxied models don't support prompt_cache_key
+  const noCacheKey = 
+    modelId.includes("databricks") || 
+    modelId.includes("claude") || 
+    modelId.includes("gemini") ||
+    modelId.includes("gpt") ||
+    modelId.includes("qwen") ||
+    modelId.includes("mistral") ||
+    modelId.includes("kimi") ||
+    modelId.includes("llama");
+
+  return { 
+    store: true, 
+    prompt_cache_key: !noCacheKey 
+  };
+}
+
+/**
+ * Parse rate limit error from API response
+ * Handles both Databricks structured errors and generic 429 responses
+ */
+function parseRateLimitError(error: any): RateLimitError {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorString = JSON.stringify(error);
+
+  // Try to parse structured error response
+  try {
+    // Look for JSON in error message
+    const jsonMatch = errorString.match(/\{[^{}]*"error"[^{}]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.error) {
+        const err = parsed.error;
+        
+        if (err.type === "rate_limit_exceeded" || err.code === 429) {
+          return {
+            isRateLimit: true,
+            limitType: err.limit_type,
+            limit: err.limit,
+            current: err.current,
+            retryAfter: err.retry_after,
+            message: err.message,
+          };
+        }
+      }
+    }
+  } catch (e) {
+    // Fallback to pattern matching
   }
 
-  // GPT models - full support
-  if (modelId.includes("gpt")) {
-    return { store: true, prompt_cache_key: true };
+  // Check for Databricks REQUEST_LIMIT_EXCEEDED
+  if (errorMessage.includes("REQUEST_LIMIT_EXCEEDED")) {
+    const modelMatch = errorMessage.match(/rate limit for ([\w-]+)/i);
+    const typeMatch = errorMessage.match(/(input|output) tokens per minute/i);
+    
+    return {
+      isRateLimit: true,
+      limitType: typeMatch ? `${typeMatch[1]}_tokens_per_minute` : "unknown",
+      message: "Exceeded Databricks workspace rate limit. " + 
+               (modelMatch ? `Model: ${modelMatch[1]}` : ""),
+    };
   }
 
-  // Databricks-prefixed models - likely don't support prompt_cache_key
-  if (modelId.includes("databricks")) {
-    return { store: true, prompt_cache_key: false };
+  // Check for generic rate limit patterns
+  if (
+    errorMessage.includes("rate limit") ||
+    errorMessage.includes("RATE_LIMIT") ||
+    errorMessage.includes("429") ||
+    errorMessage.toLowerCase().includes("too many requests")
+  ) {
+    return {
+      isRateLimit: true,
+      message: "Rate limit exceeded",
+    };
   }
 
-  // Other models - assume full support (fail-open)
-  return { store: true, prompt_cache_key: true };
+  return { isRateLimit: false };
+}
+
+/**
+ * Format rate limit error for user
+ */
+function formatRateLimitError(rateLimitInfo: RateLimitError, modelId: string): string {
+  const lines = [
+    `⚠️  Rate Limit Exceeded - Model: ${modelId}`,
+    "",
+  ];
+
+  if (rateLimitInfo.message) {
+    lines.push(rateLimitInfo.message);
+    lines.push("");
+  }
+
+  if (rateLimitInfo.limitType) {
+    const limitTypeReadable = rateLimitInfo.limitType
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, l => l.toUpperCase());
+    lines.push(`Limit Type: ${limitTypeReadable}`);
+  }
+
+  if (rateLimitInfo.limit && rateLimitInfo.current) {
+    lines.push(`Limit: ${rateLimitInfo.limit} | Current: ${rateLimitInfo.current}`);
+  }
+
+  if (rateLimitInfo.retryAfter) {
+    lines.push(`Retry After: ${rateLimitInfo.retryAfter} seconds`);
+    lines.push("");
+  } else {
+    lines.push("");
+  }
+
+  lines.push("What to do:");
+  
+  if (rateLimitInfo.retryAfter) {
+    lines.push(`  • Wait ${rateLimitInfo.retryAfter} seconds before retrying`);
+  } else {
+    lines.push(`  • Wait 60 seconds before retrying`);
+  }
+  
+  lines.push(`  • Switch to a faster/smaller model (e.g., haiku instead of opus)`);
+  lines.push(`  • Reduce your prompt length`);
+  lines.push(`  • Set a lower max_tokens value`);
+  lines.push(`  • Contact your Databricks account team to request higher rate limits`);
+
+  return lines.join("\n");
 }
 
 /**
@@ -117,18 +223,15 @@ async function fetchAvailableModels(
 }
 
 /**
- * Detect model capabilities based on name patterns and known model families.
+ * Detect model capabilities
  */
 function detectModelCapabilities(modelId: string) {
-  // Reasoning models
   const isReasoning =
-    modelId.includes("with-reasoning") ||
     modelId.includes("opus") ||
     modelId.startsWith("gpt-5") ||
     modelId.startsWith("o1") ||
     modelId.startsWith("o3");
 
-  // Multimodal support (most modern models support images)
   const isMultimodal =
     modelId.includes("claude") ||
     modelId.includes("gpt-4") ||
@@ -140,17 +243,18 @@ function detectModelCapabilities(modelId: string) {
     modelId.includes("haiku") ||
     modelId.includes("nova");
 
-  // Context window (conservative defaults, can be overridden)
   let contextWindow = 128000;
   if (modelId.includes("opus")) contextWindow = 200000;
   if (modelId.includes("gemini-2")) contextWindow = 1000000;
   if (modelId.includes("gpt-5")) contextWindow = 200000;
 
-  // Max tokens
-  let maxTokens = 16384;
-  if (modelId.includes("opus")) maxTokens = 16384;
-  if (modelId.includes("gemini")) maxTokens = 8192;
-  if (modelId.includes("gpt-5")) maxTokens = 32768;
+  // Set conservative max_tokens to avoid over-reserving output capacity
+  // Per Databricks docs: output tokens are reserved based on max_tokens
+  let maxTokens = 4096; // Conservative default
+  if (modelId.includes("opus-4.6")) maxTokens = 8192;
+  if (modelId.includes("gpt-5")) maxTokens = 8192;
+  if (modelId.includes("haiku")) maxTokens = 4096;
+  if (modelId.includes("sonnet")) maxTokens = 4096;
 
   return {
     reasoning: isReasoning,
@@ -161,7 +265,7 @@ function detectModelCapabilities(modelId: string) {
 }
 
 /**
- * Custom streaming function for LiteLLM that filters unsupported parameters
+ * Custom streaming function with rate limit error handling
  */
 function createLiteLLMStream(parameterSupport: Map<string, ParameterSupport>) {
   return function streamLiteLLM(
@@ -191,21 +295,17 @@ function createLiteLLMStream(parameterSupport: Map<string, ParameterSupport>) {
       };
 
       try {
-        stream.push({ type: "start", partial: output });
-
-        // Import streaming implementation from pi-ai
-        const piAi = await import("@mariozechner/pi-ai");
-
         // Get parameter support for this model
         const support = parameterSupport.get(model.id) || { store: true, prompt_cache_key: true };
 
-        // Create a wrapped options object with filtered sessionId if needed
+        // Filter sessionId if prompt_cache_key not supported
         const wrappedOptions = { ...options };
         if (!support.prompt_cache_key && wrappedOptions.sessionId) {
           delete wrappedOptions.sessionId;
         }
 
-        // Use the built-in azure streaming function with filtered options
+        // Import and use azure streaming
+        const piAi = await import("@mariozechner/pi-ai");
         const azureStream = (piAi as any).streamAzureOpenAIResponses(model, context, wrappedOptions);
 
         // Forward all events
@@ -213,9 +313,25 @@ function createLiteLLMStream(parameterSupport: Map<string, ParameterSupport>) {
           stream.push(event);
         }
       } catch (error) {
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        
+        // Parse rate limit error
+        const rateLimitInfo = parseRateLimitError(error);
+        
+        if (rateLimitInfo.isRateLimit) {
+          // Provide enhanced rate limit error message
+          output.stopReason = "error";
+          output.errorMessage = formatRateLimitError(rateLimitInfo, model.id);
+        } else if (options?.signal?.aborted) {
+          output.stopReason = "aborted";
+          output.errorMessage = errorMessage;
+        } else {
+          output.stopReason = "error";
+          output.errorMessage = errorMessage;
+        }
+        
         stream.push({ type: "error", reason: output.stopReason, error: output });
+      } finally {
         stream.end();
       }
     })();
@@ -262,14 +378,13 @@ export default async function (pi: ExtensionAPI) {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: capabilities.contextWindow,
       maxTokens: capabilities.maxTokens,
-      // Use compat to mark parameter support
       compat: {
         supportsStore: support.store,
       },
     };
   });
 
-  // Register the provider with custom streaming function
+  // Register the provider
   pi.registerProvider("litellm", {
     baseUrl: normalizedBaseUrl,
     apiKey,
