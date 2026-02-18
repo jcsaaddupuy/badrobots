@@ -5,8 +5,8 @@
  * error handling for Databricks Foundation Model API rate limits.
  * 
  * Environment Variables:
- * - OPENAI_BASE_URL: Base URL of the LiteLLM proxy (e.g., https://llm.example.com)
- * - OPENAI_API_KEY: API key for the LiteLLM proxy
+ * - LITELLM_BASE_URL: Base URL of the LiteLLM proxy (e.g., https://llm.example.com)
+ * - LITELLM_API_KEY: API key for the LiteLLM proxy
  * 
  * Rate Limiting Strategy (Databricks Best Practices):
  * - Sets appropriate max_tokens to avoid over-reserving output capacity
@@ -362,11 +362,11 @@ function createLiteLLMStream(parameterSupport: Map<string, ParameterSupport>) {
 }
 
 export default async function (pi: ExtensionAPI) {
-  const baseUrl = process.env.OPENAI_BASE_URL;
-  const apiKey = process.env.OPENAI_API_KEY;
+  const baseUrl = process.env.LITELLM_BASE_URL;
+  const apiKey = process.env.LITELLM_API_KEY;
 
   if (!baseUrl || !apiKey) {
-    console.warn("[litellm] OPENAI_BASE_URL or OPENAI_API_KEY not set. Extension will not work.");
+    console.warn("[litellm] LITELLM_BASE_URL or LITELLM_API_KEY not set. Extension will not work.");
     return;
   }
 
