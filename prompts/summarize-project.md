@@ -9,7 +9,7 @@ Generate a concise, high-level architecture document for a multi-package reposit
 ## Instructions
 
 1. **Discover Project Structure**
-   - Find all Python packages in the repository (look for `pyproject.toml` or `setup.py`)
+   - Find all componants in the repository (for example, look for `pyproject.toml` or `setup.py` for python project)
    - Identify the main/entry package
    - List all sub-packages and their locations
 
