@@ -1,0 +1,52 @@
+# Title Slide
+Title: Introduction to Reveal.js
+Subtitle: Creating Beautiful HTML Presentations
+Author: Your Name
+Date: February 2026
+
+# Slide 1
+## What is Reveal.js?
+- Open-source HTML presentation framework
+- Works in any modern web browser
+- Supports Markdown, code highlighting, and more
+- Easy to share and present
+
+# Slide 2
+## Key Features
+- Horizontal and vertical slides
+- Markdown support
+- Code syntax highlighting
+- Speaker notes
+- PDF export
+- Responsive design
+
+# Slide 3
+## Code Example
+Here's a simple JavaScript function:
+
+```javascript
+function greet(name) {
+  return `Hello, ${name}!`;
+}
+
+console.log(greet('World'));
+```
+
+# Slide 4
+## Why Use Reveal.js?
+- No proprietary software needed
+- Version control friendly
+- Easy to customize
+- Works offline
+- Free and open source
+
+# Slide 5
+## Getting Started
+- Download reveal.js or use CDN
+- Create HTML file with slides
+- Open in browser
+- Present!
+
+# Slide 6
+## Thank You!
+Questions?

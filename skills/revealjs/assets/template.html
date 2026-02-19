@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reveal.js Presentation</title>
+  
+  <!-- Reveal.js CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reset.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/theme/black.css" id="theme">
+  
+  <!-- Plugin CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/monokai.css">
+  
+  <!-- Custom styles -->
+  <style>
+    .reveal h1,
+    .reveal h2,
+    .reveal h3 {
+      text-transform: none;
+    }
+    
+    .reveal section img {
+      border: none;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    }
+    
+    .two-columns {
+      display: flex;
+      gap: 2rem;
+    }
+    
+    .two-columns > * {
+      flex: 1;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="reveal">
+    <div class="slides">
+      
+      <!-- Title Slide -->
+      <section>
+        <h1>Presentation Title</h1>
+        <h3>Subtitle or Description</h3>
+        <p>
+          <small>By Your Name</small><br>
+          <small>Date</small>
+        </p>
+      </section>
+      
+      <!-- Agenda -->
+      <section>
+        <h2>Agenda</h2>
+        <ul>
+          <li>Topic 1</li>
+          <li>Topic 2</li>
+          <li>Topic 3</li>
+          <li>Conclusion</li>
+        </ul>
+      </section>
+      
+      <!-- Content Slide -->
+      <section>
+        <h2>Main Topic</h2>
+        <p>Your content here</p>
+        
+        <aside class="notes">
+          Speaker notes for this slide
+        </aside>
+      </section>
+      
+      <!-- Bullet Points with Fragments -->
+      <section>
+        <h2>Key Points</h2>
+        <ul>
+          <li class="fragment">Point 1</li>
+          <li class="fragment">Point 2</li>
+          <li class="fragment">Point 3</li>
+        </ul>
+      </section>
+      
+      <!-- Two Column Layout -->
+      <section>
+        <h2>Comparison</h2>
+        <div class="two-columns">
+          <div>
+            <h3>Option A</h3>
+            <ul>
+              <li>Feature 1</li>
+              <li>Feature 2</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Option B</h3>
+            <ul>
+              <li>Feature 1</li>
+              <li>Feature 2</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+      
+      <!-- Code Example -->
+      <section>
+        <h2>Code Example</h2>
+        <pre><code class="javascript" data-trim data-line-numbers>
+function greet(name) {
+  return `Hello, ${name}!`;
+}
+
+console.log(greet('World'));
+        </code></pre>
+      </section>
+      
+      <!-- Markdown Slide -->
+      <section data-markdown>
+        <script type="text/template">
+          ## Markdown Slide
+          
+          You can write slides in **Markdown**!
+          
+          - Easy to write
+          - Clean syntax
+          - Supports formatting
+        </script>
+      </section>
+      
+      <!-- Vertical Slides -->
+      <section>
+        <section>
+          <h2>Vertical Navigation</h2>
+          <p>Press down arrow for details</p>
+        </section>
+        <section>
+          <h3>Detail 1</h3>
+          <p>More information here</p>
+        </section>
+        <section>
+          <h3>Detail 2</h3>
+          <p>Even more details</p>
+        </section>
+      </section>
+      
+      <!-- Image Slide -->
+      <section>
+        <h2>Image Example</h2>
+        <img src="https://via.placeholder.com/600x400" alt="Placeholder">
+        <p><small>Image caption</small></p>
+      </section>
+      
+      <!-- Background Slide -->
+      <section data-background="#4d7e65">
+        <h2>Custom Background</h2>
+        <p>This slide has a colored background</p>
+      </section>
+      
+      <!-- Auto-Animate Example -->
+      <section data-auto-animate>
+        <h2>Auto-Animate</h2>
+        <div data-id="box" style="width: 100px; height: 100px; background: blue;"></div>
+      </section>
+      
+      <section data-auto-animate>
+        <h2>Auto-Animate</h2>
+        <div data-id="box" style="width: 200px; height: 200px; background: red;"></div>
+      </section>
+      
+      <!-- Thank You Slide -->
+      <section>
+        <h1>Thank You!</h1>
+        <h3>Questions?</h3>
+        <p>
+          <small>Contact: your.email@example.com</small>
+        </p>
+      </section>
+      
+    </div>
+  </div>
+  
+  <!-- Reveal.js JavaScript -->
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js"></script>
+  
+  <!-- Plugins -->
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/markdown/markdown.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/highlight.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/notes/notes.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/zoom/zoom.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/search/search.js"></script>
+  
+  <!-- Initialize Reveal.js -->
+  <script>
+    Reveal.initialize({
+      // Display
+      width: 960,
+      height: 700,
+      center: true,
+      
+      // Navigation
+      controls: true,
+      progress: true,
+      slideNumber: false,
+      hash: true,
+      
+      // Transitions
+      transition: 'slide', // none/fade/slide/convex/concave/zoom
+      transitionSpeed: 'default',
+      
+      // Features
+      overview: true,
+      help: true,
+      
+      // Plugins
+      plugins: [ 
+        RevealMarkdown, 
+        RevealHighlight, 
+        RevealNotes,
+        RevealZoom,
+        RevealSearch
+      ]
+    });
+  </script>
+</body>
+</html>
