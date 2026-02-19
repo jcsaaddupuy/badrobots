@@ -56,6 +56,34 @@ Mermaid is a diagramming and charting tool that uses text-based syntax to create
 4. **Markdown compatible** - Embed directly in documentation
 5. **Live rendering** - Preview in real-time
 
+## ⚠️ CRITICAL: String Quoting Rule
+
+**ALWAYS use single quotes `'` in Mermaid diagrams, NEVER double quotes `"`**
+
+```mermaid
+# ❌ WRONG - Double quotes break rendering
+graph LR
+    A["User asks question"] --> B["Generate SQL"]
+
+# ✅ CORRECT - Single quotes work perfectly
+graph LR
+    A['User asks question'] --> B['Generate SQL']
+
+# ✅ ALSO CORRECT - No quotes when no spaces
+graph LR
+    A[User] --> B[SQL]
+```
+
+**Why?** Mermaid parsers treat double quotes as special characters, causing syntax errors. Single quotes are safe for all text content.
+
+**Apply to**:
+- Node labels: `A['Label text']`
+- Edge labels: `A -->|'Edge label'| B`
+- Messages in sequence diagrams: `A->>B: 'Message text'`
+- All text content in diagrams
+
+**Exception**: Code blocks outside diagrams can use double quotes normally.
+
 ## Basic Workflow
 
 ```
@@ -312,11 +340,12 @@ rm -rf test_safety/
 
 ## Common Pitfalls to Avoid
 
-1. ❌ Too many entities → ✅ Break into multiple diagrams
-2. ❌ Unclear labels → ✅ Use descriptive names
-3. ❌ Missing diagram type → ✅ Always declare diagram type first
-4. ❌ Syntax errors → ✅ Check reference files for correct syntax
-5. ❌ No testing → ✅ Preview before finalizing
+1. ❌ Double quotes in text → ✅ Always use single quotes `'`
+2. ❌ Too many entities → ✅ Break into multiple diagrams
+3. ❌ Unclear labels → ✅ Use descriptive names
+4. ❌ Missing diagram type → ✅ Always declare diagram type first
+5. ❌ Syntax errors → ✅ Check reference files for correct syntax
+6. ❌ No testing → ✅ Preview before finalizing
 
 ## Integration Points
 
