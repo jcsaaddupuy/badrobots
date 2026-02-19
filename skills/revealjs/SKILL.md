@@ -9,7 +9,7 @@ Create beautiful HTML presentations using reveal.js framework.
 
 ## Quick Start
 
-### Basic HTML Structure
+### Minimal Reveal.js Presentation
 
 ```html
 <!doctype html>
@@ -19,221 +19,165 @@ Create beautiful HTML presentations using reveal.js framework.
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My Presentation</title>
   
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reset.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/theme/black.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/monokai.css">
 </head>
 <body>
   <div class="reveal">
     <div class="slides">
-      <section>
-        <h2>Title Slide</h2>
-        <p>Welcome to my presentation</p>
-      </section>
-      
-      <section>
-        <h2>Second Slide</h2>
-        <p>Press Space or arrow keys to navigate</p>
-      </section>
+      <section><h2>Title</h2><p>Welcome</p></section>
+      <section><h2>Slide 2</h2><p>Use arrow keys to navigate</p></section>
     </div>
   </div>
   
-  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/markdown/markdown.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/highlight/highlight.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/plugin/notes/notes.js"></script>
-  
-  <script>
-    Reveal.initialize({
-      hash: true,
-      center: true,
-      transition: 'slide',
-      plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
-    });
-  </script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5"></script>
+  <script>Reveal.initialize({ hash: true });</script>
 </body>
 </html>
 ```
 
+For complete starter template, see [assets/template.html](assets/template.html).
+
+## Core Concepts
+
+### Architecture Overview
+
+Reveal.js is built on a modular architecture with a central Reveal API that orchestrates multiple specialized controllers:
+
+- **Reveal Object**: Main API managing initialization, navigation, and state
+- **Controllers**: Specialized modules (keyboard, fragments, backgrounds, etc.) handling specific features
+- **Plugins**: Extensible system allowing custom functionality
+- **DOM Management**: Efficient caching and updates
+
+Each controller receives a reference to the main Reveal instance, enabling seamless cross-controller communication.
+
+### HTML Structure
+
+Every reveal.js presentation requires this basic structure:
+
+```html
+<div class="reveal">
+  <div class="slides">
+    <section><!-- Horizontal slide --></section>
+    <section>
+      <section><!-- Vertical slide 1 --></section>
+      <section><!-- Vertical slide 2 --></section>
+    </section>
+  </div>
+</div>
+```
+
+- `.reveal`: Outer presentation container
+- `.slides`: Contains all slides
+- `<section>`: Individual slide (nested = vertical stack)
+
+### Navigation State
+
+Reveal.js tracks presentation position using three indices:
+
+```javascript
+{
+  h: 2,        // Horizontal slide index
+  v: 1,        // Vertical slide index (if in stack)
+  f: 3         // Fragment index (if fragments active)
+}
+```
+
+Access via: `Reveal.getIndices()`, query via `Reveal.slide(h, v, f)`
+
 ## Slide Types
 
-### Horizontal and Vertical Slides
+### Horizontal & Vertical Stacks
 
 ```html
 <!-- Horizontal slide -->
-<section>
-  <h2>Main Topic</h2>
-</section>
+<section><h2>Topic</h2></section>
 
-<!-- Vertical slide stack -->
+<!-- Vertical slides (press down arrow) -->
 <section>
-  <section>
-    <h2>Topic with Details</h2>
-    <p>Press down arrow for more</p>
-  </section>
-  <section>
-    <h2>Detail 1</h2>
-  </section>
-  <section>
-    <h2>Detail 2</h2>
-  </section>
+  <section><h2>Main</h2></section>
+  <section><h2>Detail 1</h2></section>
+  <section><h2>Detail 2</h2></section>
 </section>
 ```
 
 ### Markdown Slides
 
 ```html
-<!-- Inline Markdown -->
 <section data-markdown>
   <script type="text/template">
     ## Slide Title
     
-    This is **bold** and this is *italic*.
-    
-    - Bullet point 1
-    - Bullet point 2
-    
-    ---
-    
-    ## Next Slide
-    
-    Horizontal separator: `---`
+    - Bullet 1
+    - Bullet 2
     
     --
     
-    ## Vertical Slide
-    
-    Vertical separator: `--`
+    ## Vertical slide
   </script>
 </section>
 
-<!-- External Markdown file -->
-<section 
-  data-markdown="slides.md"
-  data-separator="^\n\n\n"
-  data-separator-vertical="^\n\n">
-</section>
+<!-- External file -->
+<section data-markdown="slides.md" data-separator="---" data-separator-vertical="--"></section>
 ```
 
-## Styling and Backgrounds
-
-### Slide Backgrounds
+## Styling & Backgrounds
 
 ```html
-<!-- Color background -->
-<section data-background="#ff0000">
-  <h2>Red Background</h2>
-</section>
+<!-- Color -->
+<section data-background="#ff0000"><h2>Red</h2></section>
 
-<!-- Gradient background -->
+<!-- Gradient -->
 <section data-background-gradient="linear-gradient(to bottom, #ddd, #191919)">
   <h2>Gradient</h2>
 </section>
 
-<!-- Image background -->
-<section 
-  data-background="image.jpg"
-  data-background-size="cover"
-  data-background-position="center">
-  <h2>Image Background</h2>
+<!-- Image/Video -->
+<section data-background="image.jpg" data-background-size="cover">
+  <h2>Image</h2>
 </section>
 
-<!-- Video background -->
-<section 
-  data-background-video="video.mp4"
-  data-background-video-loop
-  data-background-video-muted>
-  <h2>Video Background</h2>
-</section>
-
-<!-- Iframe background -->
-<section 
-  data-background-iframe="https://example.com"
-  data-background-interactive>
-  <h2>Embedded Website</h2>
-</section>
-
-<!-- Background opacity -->
-<section 
-  data-background="bright.jpg"
-  data-background-opacity="0.3">
-  <h2>Dimmed Background</h2>
+<section data-background-video="video.mp4" data-background-video-loop>
+  <h2>Video</h2>
 </section>
 ```
 
-### Themes
+**Built-in themes:** black, white, league, beige, sky, night, serif, simple
 
-Built-in themes: `black`, `white`, `league`, `beige`, `sky`, `night`, `serif`, `simple`, `solarized`, `blood`, `moon`
-
+Change theme in `<head>`:
 ```html
-<!-- Change theme in head -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/theme/white.css">
 ```
 
-For custom themes, see [references/custom-themes.md](references/custom-themes.md).
+See [references/custom-themes.md](references/custom-themes.md) for custom styling.
 
-## Fragments and Animations
+## Fragments & Animations
 
-### Fragments (Incremental Display)
-
+**Incremental reveal:**
 ```html
 <section>
-  <h2>Bullet Points</h2>
   <ul>
-    <li class="fragment">First point</li>
-    <li class="fragment">Second point</li>
-    <li class="fragment">Third point</li>
+    <li class="fragment">Point 1</li>
+    <li class="fragment fade-in">Point 2</li>
+    <li class="fragment highlight-red">Point 3</li>
   </ul>
-  
-  <!-- Fragment animations -->
-  <p class="fragment fade-in">Fade in</p>
-  <p class="fragment fade-out">Fade out</p>
-  <p class="fragment fade-up">Slide up</p>
-  <p class="fragment grow">Grow</p>
-  <p class="fragment shrink">Shrink</p>
-  <p class="fragment highlight-red">Highlight red</p>
-  
-  <!-- Custom order -->
-  <p class="fragment" data-fragment-index="3">Third</p>
-  <p class="fragment" data-fragment-index="1">First</p>
-  <p class="fragment" data-fragment-index="2">Second</p>
 </section>
 ```
 
-### Auto-Animate
-
+**Auto-animate smooth transitions:**
 ```html
-<!-- Slide 1 -->
 <section data-auto-animate>
-  <h2 data-id="title">Introduction</h2>
-  <div data-id="box" style="width: 100px; height: 100px; background: blue;"></div>
-</section>
-
-<!-- Slide 2 - elements smoothly animate -->
-<section data-auto-animate>
-  <h2 data-id="title" style="color: red;">Introduction</h2>
-  <div data-id="box" style="width: 200px; height: 200px; background: red;"></div>
-</section>
-
-<!-- Code animation -->
-<section data-auto-animate>
-  <pre data-id="code"><code class="javascript">
-function hello() {
-  console.log('Hello');
-}
-  </code></pre>
+  <h2 data-id="title">Intro</h2>
+  <div data-id="box" style="width: 100px; background: blue;"></div>
 </section>
 
 <section data-auto-animate>
-  <pre data-id="code"><code class="javascript">
-function hello(name) {
-  console.log('Hello ' + name);
-}
-hello('World');
-  </code></pre>
+  <h2 data-id="title" style="color: red;">Intro</h2>
+  <div data-id="box" style="width: 300px; background: red;"></div>
 </section>
 ```
+
+See [references/api.md](references/api.md) for animation types and options.
 
 ## Speaker Notes
 
@@ -268,74 +212,86 @@ hello('World');
 
 Press `s` key during presentation to open speaker view with notes, timer, and preview.
 
-## Code Highlighting
-
-```html
-<section>
-  <h2>Code Example</h2>
-  <pre><code class="javascript" data-trim data-line-numbers="1-2|3-5">
-function factorial(n) {
-  if (n === 0) return 1;
-  
-  return n * factorial(n - 1);
-}
-console.log(factorial(5));
-  </code></pre>
-</section>
-
-<!-- Line number offset -->
-<section>
-  <pre><code class="python" data-trim data-line-numbers="100:">
-def greet(name):
-    print(f"Hello, {name}!")
-  </code></pre>
-</section>
-```
-
 ## Configuration
+
+Reveal.js has numerous configuration options that control behavior and features. The framework uses a controller pattern where each controller can be configured via the initialize options.
+
+### Essential Configuration
 
 ```javascript
 Reveal.initialize({
-  // Display
+  // Display & layout
   width: 960,
   height: 700,
-  margin: 0.04,
   center: true,
+  margin: 0.1,
   
-  // Navigation
-  controls: true,
-  progress: true,
-  slideNumber: false,
-  hash: true,
-  keyboard: true,
+  // Navigation controllers
+  controls: true,           // Enable arrow buttons (controls controller)
+  keyboard: true,           // Enable keyboard nav (keyboard controller)
+  touch: true,              // Enable swipe (touch controller)
+  progress: true,           // Enable progress bar (progress controller)
+  
+  // Navigation behavior
+  hash: true,               // Use URL hash for bookmarking
+  overview: true,           // Enable overview/grid mode
+  slideNumber: false,       // Show slide numbers
   
   // Transitions
-  transition: 'slide', // none/fade/slide/convex/concave/zoom
-  transitionSpeed: 'default', // default/fast/slow
+  transition: 'slide',      // Global transition type
   backgroundTransition: 'fade',
-  
-  // Auto-animate
-  autoAnimate: true,
-  autoAnimateDuration: 1.0,
-  
-  // Fragments
-  fragments: true,
+  transitionSpeed: 'default',
   
   // Features
-  overview: true,
-  help: true,
+  autoAnimate: true,        // Auto-animate elements
+  fragments: true,          // Enable fragments
   
-  // Plugins
-  plugins: [ 
-    RevealMarkdown, 
-    RevealHighlight, 
-    RevealNotes,
-    RevealMath,
-    RevealSearch,
-    RevealZoom
+  // Plugins (controllers that add functionality)
+  plugins: [
+    RevealMarkdown,      // Parse Markdown slides
+    RevealHighlight,     // Syntax highlighting
+    RevealNotes,         // Speaker notes
+    RevealMath,          // Math rendering
+    RevealSearch,        // Search functionality
+    RevealZoom           // Zoom on click
   ]
 });
 ```
+
+### Controller-Specific Options
+
+Each built-in controller can be configured:
+
+```javascript
+Reveal.initialize({
+  // Keyboard controller options
+  keyboard: true,
+  
+  // Touch/gesture controller options
+  touch: true,
+  
+  // Fragments controller options
+  fragments: true,
+  fragmentInURL: false,
+  
+  // Auto-animate controller
+  autoAnimate: true,
+  autoAnimateDuration: 1.0,
+  autoAnimateEasing: 'ease',
+  
+  // Background controller
+  backgroundTransition: 'fade',
+  
+  // Progress controller
+  progress: true,
+  
+  // Slide number controller
+  slideNumber: false,
+  showSlideNumber: 'print'  // Show only in print/PDF
+});
+```
+
+For complete configuration reference and advanced options, see [references/architecture.md](references/architecture.md#all-configuration-options).
 
 ## PDF Export
 
@@ -398,6 +354,45 @@ Reveal.initialize({
 </section>
 ```
 
+## Event Handling
+
+Reveal.js emits events at key points in navigation and lifecycle. Use these to hook into presentation flow:
+
+```javascript
+// Navigation events
+Reveal.addEventListener('slidechanged', (event) => {
+  console.log(`Moved to slide ${event.indexh}.${event.indexv}`);
+});
+
+Reveal.addEventListener('fragmentshown', (event) => {
+  console.log('Fragment revealed:', event.fragment);
+});
+
+Reveal.addEventListener('fragmenthidden', (event) => {
+  console.log('Fragment hidden:', event.fragment);
+});
+
+// Initialization and state
+Reveal.addEventListener('ready', () => {
+  console.log('Presentation ready');
+});
+
+Reveal.addEventListener('paused', () => {
+  console.log('Presentation paused');
+});
+
+// Mode changes
+Reveal.addEventListener('overviewshown', () => {
+  console.log('Entered overview mode');
+});
+
+Reveal.addEventListener('overviewhidden', () => {
+  console.log('Left overview mode');
+});
+```
+
+For complete event reference and lifecycle details, see [references/architecture.md](references/architecture.md).
+
 ## Keyboard Shortcuts
 
 - **Arrow keys** / **Space**: Navigate slides
@@ -410,6 +405,7 @@ Reveal.initialize({
 ## Advanced Features
 
 For advanced topics, see:
+- **Architecture & Lifecycle**: [references/architecture.md](references/architecture.md) - Internal structure, initialization, controllers, events
 - **Custom themes and styling**: [references/custom-themes.md](references/custom-themes.md)
 - **Plugin development**: [references/plugins.md](references/plugins.md)
 - **API usage**: [references/api.md](references/api.md)
