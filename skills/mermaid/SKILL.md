@@ -56,7 +56,9 @@ Mermaid is a diagramming and charting tool that uses text-based syntax to create
 4. **Markdown compatible** - Embed directly in documentation
 5. **Live rendering** - Preview in real-time
 
-## ⚠️ CRITICAL: String Quoting Rule
+## ⚠️ CRITICAL: Syntax Rules for Mermaid
+
+### Rule 1: Always Use Single Quotes, Never Double Quotes
 
 **ALWAYS use single quotes `'` in Mermaid diagrams, NEVER double quotes `"`**
 
@@ -76,13 +78,37 @@ graph LR
 
 **Why?** Mermaid parsers treat double quotes as special characters, causing syntax errors. Single quotes are safe for all text content.
 
-**Apply to**:
-- Node labels: `A['Label text']`
-- Edge labels: `A -->|'Edge label'| B`
-- Messages in sequence diagrams: `A->>B: 'Message text'`
-- All text content in diagrams
+### Rule 2: Avoid Curly Braces in Node Labels
 
-**Exception**: Code blocks outside diagrams can use double quotes normally.
+**Curly braces `{}` have special meaning in Mermaid and cause parse errors in node labels**
+
+```mermaid
+# ❌ WRONG - Curly braces break parsing
+graph LR
+    A[Request] --> B[Response: {success: true, data: [...]}]
+
+# ✅ CORRECT - Describe structure without braces
+graph LR
+    A[Request] --> B[Success Response:<br/>success, data, metadata]
+
+# ✅ ALSO CORRECT - Use parentheses instead
+graph LR
+    A[Request] --> B[Response (success, data)]
+```
+
+**Why?** Curly braces `{}` are reserved for decision nodes and subgraphs. Using them in labels causes "Expecting 'SQE', got 'DIAMOND_START'" errors.
+
+**Apply to**:
+- Node labels: Use descriptive text instead of JSON-like syntax
+- Edge labels: Avoid showing object structures
+- Messages: Describe content, don't show literal syntax
+
+### Rule 3: Special Characters in Labels
+
+**Safe characters**: Letters, numbers, spaces, hyphens, underscores, parentheses `()`, colons `:`
+**Avoid in labels**: `{}`, `[]` (use sparingly), `<>`, `|` (except in edge syntax)
+
+**Exception**: Code blocks outside diagrams can use any syntax normally.
 
 ## Basic Workflow
 
@@ -340,12 +366,13 @@ rm -rf test_safety/
 
 ## Common Pitfalls to Avoid
 
-1. ❌ Double quotes in text → ✅ Always use single quotes `'`
-2. ❌ Too many entities → ✅ Break into multiple diagrams
-3. ❌ Unclear labels → ✅ Use descriptive names
-4. ❌ Missing diagram type → ✅ Always declare diagram type first
-5. ❌ Syntax errors → ✅ Check reference files for correct syntax
-6. ❌ No testing → ✅ Preview before finalizing
+1. ❌ Double quotes `"` in text → ✅ Always use single quotes `'`
+2. ❌ Curly braces `{}` in labels → ✅ Use descriptive text instead
+3. ❌ Too many entities → ✅ Break into multiple diagrams
+4. ❌ Unclear labels → ✅ Use descriptive names
+5. ❌ Missing diagram type → ✅ Always declare diagram type first
+6. ❌ Syntax errors → ✅ Check reference files for correct syntax
+7. ❌ No testing → ✅ Preview before finalizing
 
 ## Integration Points
 
