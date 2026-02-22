@@ -1,11 +1,11 @@
 ---
 name: deepwiki
-description: Extract comprehensive documentation from DeepWiki to generate custom skills. Use when user requests skill creation from DeepWiki documentation (e.g., "create a skill for FastAPI using deepwiki", "generate a Vue.js skill from deepwiki docs"). Searches 300+ indexed repositories via API, then uses mcporter to access DeepWiki MCP tools for documentation retrieval.
+description: Search and retrieve comprehensive documentation from DeepWiki for 300+ indexed repositories. Use for documentation lookups, architecture exploration, API reference queries, and learning about popular frameworks and libraries.
 ---
 
-# DeepWiki Skill Generator
+# DeepWiki Documentation Access
 
-Extract comprehensive documentation from DeepWiki and generate custom skills for tools, frameworks, and libraries.
+Search and retrieve comprehensive documentation from DeepWiki for popular GitHub repositories.
 
 ## Overview
 
@@ -13,40 +13,40 @@ DeepWiki (https://deepwiki.com/) provides AI-generated, navigable documentation 
 
 1. **Search** for repositories in DeepWiki via API
 2. **Fetch** documentation using mcporter MCP tools
-3. **Generate** custom skills following skill-creator patterns
+3. **Retrieve** architecture guides, API references, and usage patterns
 
 ## Quick Start
 
-### Generate a Skill from DeepWiki
+### Search for a Repository
 
 ```bash
-# User request
-"Create a skill for FastAPI using deepwiki"
+# Search for a specific repository
+SEARCH_TERM="fastapi"
+RESULTS=$(bash -c "curl -s 'https://api.devin.ai/ada/list_public_indexes?search_repo=$SEARCH_TERM'")
+echo "$RESULTS" | jq '.indices[0]'
+```
 
-# Workflow
-1. Search DeepWiki API for "fastapi"
-2. Select most appropriate match (by stars, recency, exact name)
-3. Use mcporter to list available DeepWiki MCP tools
-4. Call appropriate MCP tools to fetch documentation
-5. Generate skill with SKILL.md + references/
+### Retrieve Documentation
+
+```bash
+# List available DeepWiki MCP tools
+npx mcporter list https://mcp.deepwiki.com/mcp
+
+# Fetch documentation for a repository
+npx mcporter call https://mcp.deepwiki.com/mcp <tool-name> --args '{"org":"tiangolo","repo":"fastapi"}'
 ```
 
 ## How It Works
 
 ### 1. Repository Search
 
-Search the DeepWiki index for repositories:
+Search the DeepWiki index for repositories using the public API:
 
 ```bash
-# Search for a specific repository
-SEARCH_TERM="fastapi"
-RESULTS=$(bash -c "curl -s 'https://api.devin.ai/ada/list_public_indexes?search_repo=$SEARCH_TERM'")
+# API endpoint
+https://api.devin.ai/ada/list_public_indexes?search_repo=SEARCH_TERM
 
-# Select most appropriate match
-# Priority: highest stars → most recent update → exact name match
-BEST_MATCH=$(echo "$RESULTS" | jq -r '.indices | sort_by(-(.stargazers_count // 0), -(.last_modified // "")) | .[0]')
-ORG=$(echo "$BEST_MATCH" | jq -r '.repo_name' | cut -d'/' -f1)
-REPO=$(echo "$BEST_MATCH" | jq -r '.repo_name' | cut -d'/' -f2)
+# Returns JSON with indexed repositories
 ```
 
 **API Response format:**
@@ -68,10 +68,14 @@ REPO=$(echo "$BEST_MATCH" | jq -r '.repo_name' | cut -d'/' -f2)
 }
 ```
 
-**Handling no results:**
-If repo not found in DeepWiki, inform user: "Repository not indexed in DeepWiki. Available similar repos: [list top 3 matches or inform unavailable]"
+**Selection strategy:**
+- Sort by: highest stars → most recent update → exact name match
+- Use best match for documentation retrieval
 
-### 2. Discover DeepWiki MCP Tools
+**Handling no results:**
+If repo not found in DeepWiki, inform user: "Repository not indexed in DeepWiki. Available similar repos: [list alternatives if any]"
+
+### 2. Discover MCP Tools
 
 Use mcporter to list available tools from the DeepWiki MCP server:
 
@@ -80,168 +84,81 @@ Use mcporter to list available tools from the DeepWiki MCP server:
 npx mcporter list https://mcp.deepwiki.com/mcp
 ```
 
-This will show available tools for fetching documentation. Use the appropriate tools to retrieve documentation for the selected repository.
+This shows available tools for fetching different types of documentation (API references, guides, examples, etc.).
 
 ### 3. Fetch Documentation
 
-Use mcporter to call DeepWiki MCP tools with the repository information:
+Use mcporter to call DeepWiki MCP tools with repository information:
 
 ```bash
-# Example: Call MCP tool to fetch documentation
-# (Exact tool names and parameters depend on mcporter list output)
-npx mcporter call https://mcp.deepwiki.com/mcp <tool-name> --args '{"org":"'$ORG'","repo":"'$REPO'"}'
+# Call MCP tool to fetch documentation
+npx mcporter call https://mcp.deepwiki.com/mcp <tool-name> --args '{"org":"<org>","repo":"<repo>"}'
 ```
 
-### 4. Skill Generation
+## Common Use Cases
 
-Generate skill following skill-creator patterns:
+### Look Up API Documentation
 
-```
-generated-skill/
-├── SKILL.md (core workflow + quick start)
-├── references/
-│   ├── api.md (complete API reference)
-│   ├── patterns.md (common usage patterns)
-│   └── advanced.md (advanced features)
-└── assets/
-    └── (templates, examples if applicable)
+```bash
+# Search for a library
+curl -s 'https://api.devin.ai/ada/list_public_indexes?search_repo=axios' | jq '.indices[0]'
+
+# Fetch documentation with mcporter
+npx mcporter call https://mcp.deepwiki.com/mcp get_documentation --args '{"org":"axios","repo":"axios"}'
 ```
 
-**Section Priority for Skills:**
-1. **SKILL.md content** (keep lean, <500 lines):
-   - Overview/Introduction
-   - Quick Start / Getting Started
-   - Core Concepts
-   - Common Patterns
-   - Configuration Essentials
+### Find Architecture Patterns
 
-2. **references/ content** (detailed deep dives):
-   - Complete API Reference
-   - Advanced Features
-   - Architecture Details
-   - Examples & Patterns
-   - Troubleshooting
+```bash
+# Search for a framework
+curl -s 'https://api.devin.ai/ada/list_public_indexes?search_repo=django' | jq '.indices[0]'
 
-**SKILL.md Structure:**
-```markdown
----
-name: [tool-name]
-description: [What it does + when to use]
----
-
-# [Tool Name]
-
-## Quick Start
-[Essential getting started info]
-
-## Core Concepts
-[Key ideas to understand]
-
-## Common Patterns
-[Most frequent use cases]
-
-## Advanced Features
-- See references/api.md for complete API
-- See references/patterns.md for examples
-- See references/advanced.md for deep dives
+# Retrieve architectural guides
+npx mcporter call https://mcp.deepwiki.com/mcp get_architecture --args '{"org":"django","repo":"django"}'
 ```
 
-## Usage Patterns
+### Explore Usage Examples
 
-### Pattern 1: Generate Skill from DeepWiki
+```bash
+# Search for a tool
+curl -s 'https://api.devin.ai/ada/list_public_indexes?search_repo=kubernetes' | jq '.indices[0]'
 
-```
-User: "Create a skill for FastAPI using deepwiki"
-
-Steps:
-1. Search: bash -c "curl -s 'https://api.devin.ai/ada/list_public_indexes?search_repo=fastapi'"
-2. Select: tiangolo/fastapi (highest stars)
-3. List tools: npx mcporter list https://mcp.deepwiki.com/mcp
-4. Fetch docs: npx mcporter call https://mcp.deepwiki.com/mcp <tool> --args '{"org":"tiangolo","repo":"fastapi"}'
-5. Generate: Create skill with SKILL.md + references/
+# Get common patterns and examples
+npx mcporter call https://mcp.deepwiki.com/mcp get_examples --args '{"org":"kubernetes","repo":"kubernetes"}'
 ```
 
-### Pattern 2: Handle Unavailable Repository
+## Query Optimization
 
-```
-User: "Create a skill for my-private-lib using deepwiki"
-
-Steps:
-1. Search: bash -c "curl -s 'https://api.devin.ai/ada/list_public_indexes?search_repo=my-private-lib'"
-2. Result: No matches found
-3. Inform: "my-private-lib is not indexed in DeepWiki. 
-   Available alternatives: [list similar repos if any]"
+**Exact match searches:**
+Include the exact repository name for better results
+```bash
+search_repo=fastapi  # Good: exact match
+search_repo=fast    # Less optimal: partial match
 ```
 
-## Skill-Creator Integration
+**Multi-word searches:**
+Use underscores or dashes (as they appear on GitHub)
+```bash
+search_repo=machine-learning-models
+search_repo=computer_vision
+```
 
-Generated skills follow skill-creator best practices:
+**Sorting results:**
+Results are automatically sorted by relevance; use jq to filter:
+```bash
+# Get top 5 results by stars
+echo "$RESULTS" | jq '.indices | sort_by(-(.stargazers_count // 0)) | .[0:5]'
 
-- **Progressive disclosure:** SKILL.md stays lean (<500 lines), detailed content in references/
-- **Concise instructions:** Only essential information in SKILL.md
-- **Organized references:** Separate files by domain/feature
-- **Clear navigation:** SKILL.md links to relevant references/
-- **Practical examples:** Code examples preserved from DeepWiki docs
+# Get most recently updated
+echo "$RESULTS" | jq '.indices | sort_by(-(.last_modified // "")) | .[0]'
+```
 
-See `~/.pi/agent/skills/skill-creator/` for complete guidelines.
-
-## Comparison with Context7
-
-| Aspect | Context7 | DeepWiki |
-|--------|----------|----------|
-| Use Case | Code snippets, API examples | Architecture, comprehensive guides |
-| Trigger | Automatic fallback | Explicit request only |
-| Coverage | Most libraries | 300 top repos |
-| Format | Snippets/chunks | Full wiki structure |
-| Auth | API key required | Public access |
-| Best For | Implementation details | Skill generation |
-
-## Limitations & Notes
+#### Limitations & Notes
 
 - **Coverage:** Only 300 most popular repositories indexed
 - **Quality:** DeepWiki docs are AI-generated; quality varies by repo
 - **Selection:** Multi-repo matches use automatic selection (stars → recency → name)
 - **Errors:** Non-indexed repos inform user; no fallback to other sources
-
-## Examples
-
-### Example 1: FastAPI Skill
-
-```
-Request: "Create a FastAPI skill using deepwiki"
-
-Generated skill structure:
-fastapi-skill/
-├── SKILL.md
-│   - Quick Start (basic app setup)
-│   - Core Concepts (routing, dependency injection)
-│   - Common Patterns (middleware, error handling)
-├── references/
-│   ├── api.md (complete endpoint reference)
-│   ├── patterns.md (authentication, validation, etc.)
-│   └── advanced.md (background tasks, WebSockets, etc.)
-└── assets/
-    └── example-app.py (minimal FastAPI example)
-```
-
-### Example 2: Vue.js Skill
-
-```
-Request: "Generate a Vue skill from deepwiki"
-
-Generated skill structure:
-vue-skill/
-├── SKILL.md
-│   - Quick Start (component basics)
-│   - Reactivity System
-│   - Common Patterns
-├── references/
-│   ├── api.md (complete API reference)
-│   ├── composition-api.md (modern Vue 3 patterns)
-│   └── examples.md (real-world examples)
-└── assets/
-    └── hello-world.vue (minimal component)
-```
 
 ## Troubleshooting
 
@@ -253,6 +170,9 @@ A: DeepWiki docs are AI-generated. Check the original GitHub repo for complete d
 
 **Q: mcporter command fails**
 A: Ensure mcporter is installed: `npm install -g mcporter`. Check that the MCP server URL is correct.
+
+**Q: What's the difference between DeepWiki and other documentation sources?**
+A: DeepWiki specializes in comprehensive architecture and design documentation for popular repos. Use Context7 for quick code snippets and implementation details.
 
 ## Quick Reference
 
@@ -269,4 +189,14 @@ npx mcporter list https://mcp.deepwiki.com/mcp
 ### Call DeepWiki MCP Tool
 ```bash
 npx mcporter call https://mcp.deepwiki.com/mcp <tool-name> --args '{"org":"<org>","repo":"<repo>"}'
+```
+
+### Extract Repository Info
+```bash
+# Extract org and repo name from search results
+RESULT=$(bash -c "curl -s 'https://api.devin.ai/ada/list_public_indexes?search_repo=fastapi'")
+REPO_NAME=$(echo "$RESULT" | jq -r '.indices[0].repo_name')
+ORG=$(echo "$REPO_NAME" | cut -d'/' -f1)
+REPO=$(echo "$REPO_NAME" | cut -d'/' -f2)
+echo "org=$ORG, repo=$REPO"
 ```
