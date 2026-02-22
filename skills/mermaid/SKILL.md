@@ -103,7 +103,42 @@ graph LR
 - Edge labels: Avoid showing object structures
 - Messages: Describe content, don't show literal syntax
 
-### Rule 3: Special Characters in Labels
+### Rule 3: No Numbered Lists with Periods in Mermaid
+
+**NEVER use `1.`, `2.`, `3.` format inside Mermaid diagrams - use bullet points or remove periods**
+
+```mermaid
+# ❌ WRONG - Numbers with periods break parsing
+graph TD
+    A[Step 1. DNS query] --> B[Step 2. Connect]
+    C[Item 1. First] --> D[Item 2. Second]
+
+# ✅ CORRECT - Use bullet points instead
+graph TD
+    A["Step - DNS query"] --> B["Step - Connect"]
+    C["Item - First"] --> D["Item - Second"]
+
+# ✅ ALSO CORRECT - Just remove the periods
+graph TD
+    A["Step 1 DNS query"] --> B["Step 2 Connect"]
+    C["Item 1 First"] --> D["Item 2 Second"]
+```
+
+**Why?** Mermaid number parsing gets confused by the period format (e.g., `1.`, `2.`). It interprets the period as a decimal or special character, causing parsing errors.
+
+**Rule applies to**:
+- Node labels (text inside brackets)
+- Edge labels (text on arrows)
+- Any text that would be a numbered list
+- Tooltips and descriptions
+
+**Workaround for ordered sequences:**
+- Use edge labels without periods: `|Step 1: DNS|` or `|DNS query|`
+- Use bullet points: `- First step` (outside diagram)
+- Use letters instead: `A)`, `B)`, `C)`
+- Use descriptive text with hyphens: `Step - DNS query`
+
+### Rule 4: Special Characters in Labels
 
 **Safe characters**: Letters, numbers, spaces, hyphens, underscores, parentheses `()`, colons `:`
 **Avoid in labels**: `{}`, `[]` (use sparingly), `<>`, `|` (except in edge syntax)
@@ -366,13 +401,14 @@ rm -rf test_safety/
 
 ## Common Pitfalls to Avoid
 
-1. ❌ Double quotes `"` in text → ✅ Always use single quotes `'`
-2. ❌ Curly braces `{}` in labels → ✅ Use descriptive text instead
-3. ❌ Too many entities → ✅ Break into multiple diagrams
-4. ❌ Unclear labels → ✅ Use descriptive names
-5. ❌ Missing diagram type → ✅ Always declare diagram type first
-6. ❌ Syntax errors → ✅ Check reference files for correct syntax
-7. ❌ No testing → ✅ Preview before finalizing
+- ❌ Double quotes `"` in text → ✅ Always use single quotes `'`
+- ❌ Curly braces `{}` in labels → ✅ Use descriptive text instead
+- ❌ Numbered lists with periods (`1.`, `2.`) → ✅ Use bullet points or remove periods
+- ❌ Too many entities → ✅ Break into multiple diagrams
+- ❌ Unclear labels → ✅ Use descriptive names
+- ❌ Missing diagram type → ✅ Always declare diagram type first
+- ❌ Syntax errors → ✅ Check reference files for correct syntax
+- ❌ No testing → ✅ Preview before finalizing
 
 ## Integration Points
 
