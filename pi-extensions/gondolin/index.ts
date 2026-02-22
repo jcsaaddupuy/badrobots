@@ -62,6 +62,21 @@ const vms = new Map<string, VM>();
 const vmIds = new Map<string, string>();
 let currentSessionId: string | undefined;
 let attachedVm: VM | null = null;
+let lastContext: any = null;
+
+function updateStatusBar() {
+  if (!lastContext) return;
+  
+  if (!attachedVm) {
+    lastContext.ui.setStatus("gondolin", undefined);
+  } else {
+    const vmName = vmIds.get(attachedVm.id) || "unknown";
+    const theme = lastContext.ui.theme;
+    const indicator = theme.fg("accent", "▶");
+    const status = theme.fg("dim", ` Sandbox: ${vmName}`);
+    lastContext.ui.setStatus("gondolin", indicator + status);
+  }
+}
 
 function shQuote(value: string): string {
   return "'" + value.replace(/'/g, "'\\''") + "'";
@@ -77,6 +92,7 @@ function cleanupVm(vmName: string, vmId: string): void {
   globalThis.gondolinVmRegistry.delete(vmName);
   if (attachedVm && vmIds.get(attachedVm.id) === vmName) {
     attachedVm = null;
+    updateStatusBar();
   }
 }
 
@@ -207,6 +223,20 @@ export default function (pi: ExtensionAPI) {
     vms.set(vmName, vm);
     vmIds.set(vm.id, vmName);
   }
+
+  // Initialize status bar on session start
+  pi.on("session_start", async (_event, ctx) => {
+    lastContext = ctx;
+    updateStatusBar();
+  });
+
+  // Clear status on session shutdown
+  pi.on("session_shutdown", () => {
+    attachedVm = null;
+    vms.clear();
+    vmIds.clear();
+    lastContext = null;
+  });
 
   const localRead = createReadTool(localCwd);
   const localWrite = createWriteTool(localCwd);
@@ -405,6 +435,7 @@ export default function (pi: ExtensionAPI) {
 
             if (vms.has(name)) {
               attachedVm = vms.get(name)!;
+              updateStatusBar();
               ctx.ui.notify(`Attached to: ${name}`, "success");
               return;
             }
@@ -419,6 +450,7 @@ export default function (pi: ExtensionAPI) {
               const vmName = vmIds.get(session.id);
               if (vmName && vms.has(vmName)) {
                 attachedVm = vms.get(vmName)!;
+                updateStatusBar();
                 ctx.ui.notify(`Attached to: ${vmName}`, "success");
                 return;
               }
@@ -433,6 +465,7 @@ export default function (pi: ExtensionAPI) {
                 const vmName = vmIds.get(currentVMs[0].id);
                 if (vmName && vms.has(vmName)) {
                   attachedVm = vms.get(vmName)!;
+                  updateStatusBar();
                   ctx.ui.notify(`Attached to: ${vmName}`, "success");
                   return;
                 }
@@ -449,6 +482,7 @@ export default function (pi: ExtensionAPI) {
               return;
             }
             attachedVm = null;
+            updateStatusBar();
             ctx.ui.notify("Detached", "success");
             break;
           }
@@ -511,11 +545,5 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Error: ${error}`, "error");
       }
     },
-  });
-
-  pi.on("session_shutdown", () => {
-    attachedVm = null;
-    vms.clear();
-    vmIds.clear();
   });
 }
