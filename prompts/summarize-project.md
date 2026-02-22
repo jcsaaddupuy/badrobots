@@ -99,3 +99,5 @@ Generate a concise, high-level architecture document for a multi-package reposit
 - Understanding system boundaries
 - Identifying technical debt
 - Creating deployment documentation
+
+$@
