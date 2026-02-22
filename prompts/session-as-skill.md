@@ -31,3 +31,5 @@ If nothing new, do not edit anything.
     - Basic usage & common patterns
     - Quick reference
     - Cross-references to related skills
+
+$@
