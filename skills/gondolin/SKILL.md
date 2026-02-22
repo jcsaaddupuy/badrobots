@@ -988,6 +988,7 @@ $ gondolin build --config config.json --output ./assets
 
 ## Related Skills
 
+- **pi-tool-routing** - Building pi extensions that route tools through Gondolin or other backends. Use when integrating Gondolin into a pi extension to wrap read/write/edit/bash tools with state persistence across reloads.
 - **docker** - Container-based isolation (vs VM isolation)
 - **python-uv** - Package management in isolated environments
 - **gitlab-ci** - CI/CD integration with sandboxed builds
