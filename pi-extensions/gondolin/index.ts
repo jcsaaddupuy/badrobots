@@ -9,15 +9,24 @@ import {
   type ReadOperations,
   type WriteOperations,
 } from "@mariozechner/pi-coding-agent";
-import { VM, RealFSProvider, listSessions, findSession, VmCheckpoint } from "@earendil-works/gondolin";
+import { VM, RealFSProvider, listSessions, findSession, createHttpHooks } from "@earendil-works/gondolin";
 import path from "node:path";
 
 const PI_PREFIX = "pi:";
 const SESSION_MARKER = "◆"; // Unicode marker for current session VMs
 const WORKSPACE = "/root/workspace";
 
-// Track VMs (name -> VM and id -> name mapping)
-const vms = new Map<string, VM>();
+// Global persistent storage for VMs (survives /reload)
+declare global {
+  var gondolinVmRegistry: Map<string, { name: string; vm: VM }>;
+}
+
+if (!globalThis.gondolinVmRegistry) {
+  globalThis.gondolinVmRegistry = new Map();
+}
+
+// Local references for this session
+const vms = new Map<string, VM>(); // name -> VM (loaded from global registry on startup)
 const vmIds = new Map<string, string>(); // VM id -> name
 let currentSessionId: string | undefined;
 
@@ -89,21 +98,19 @@ function createVmEditOps(vm: VM, localCwd: string): EditOperations {
   return { readFile: r.readFile, access: r.access, writeFile: w.writeFile };
 }
 
-function sanitizeEnv(env?: NodeJS.ProcessEnv): Record<string, string> | undefined {
-  if (!env) return undefined;
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) {
-    if (typeof v === "string") out[k] = v;
-  }
-  return out;
-}
-
 function createVmBashOps(vm: VM, localCwd: string): BashOperations {
   return {
-    exec: async (command, cwd, { onData, signal, timeout, env }) => {
-      const guestCwd = toGuestPath(localCwd, cwd);
-      console.error(`[gondolin] bash in VM: cwd=${cwd} -> ${guestCwd}, cmd=${command.substring(0, 50)}`);
-      
+    exec: async (command, cwd, { onData, signal, timeout, env: _env }) => {
+      // Don't use any env passed from the tool - rely only on VM's environment
+      // configured at creation time. This prevents host proxy vars from leaking.
+
+      let guestCwd: string;
+      try {
+        guestCwd = toGuestPath(localCwd, cwd);
+      } catch (e) {
+        throw e;
+      }
+
       const ac = new AbortController();
       const onAbort = () => ac.abort();
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -112,16 +119,16 @@ function createVmBashOps(vm: VM, localCwd: string): BashOperations {
       const timer =
         timeout && timeout > 0
           ? setTimeout(() => {
-              timedOut = true;
-              ac.abort();
-            }, timeout * 1000)
+            timedOut = true;
+            ac.abort();
+          }, timeout * 1000)
           : undefined;
 
       try {
         const proc = vm.exec(["/bin/bash", "-lc", command], {
           cwd: guestCwd,
           signal: ac.signal,
-          env: sanitizeEnv(env),
+          // Don't pass env - rely on VM's environment set at creation
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -147,6 +154,12 @@ function createVmBashOps(vm: VM, localCwd: string): BashOperations {
 export default function (pi: ExtensionAPI) {
   const localCwd = process.cwd();
 
+  // Load existing VMs from global registry on startup
+  for (const [vmName, { vm }] of globalThis.gondolinVmRegistry) {
+    vms.set(vmName, vm);
+    vmIds.set(vm.id, vmName);
+  }
+
   // Create original tool definitions
   const localRead = createReadTool(localCwd);
   const localWrite = createWriteTool(localCwd);
@@ -157,83 +170,82 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     ...localRead,
     async execute(id, params, signal, onUpdate, ctx) {
-      console.error(`[gondolin] read tool called, attachedVm=${attachedVm ? "YES" : "NO"}`);
       if (!attachedVm) {
         return localRead.execute(id, params, signal, onUpdate, ctx);
       }
       const tool = createReadTool(localCwd, {
         operations: createVmReadOps(attachedVm, localCwd),
       });
-      return tool.execute(id, params, signal, onUpdate);
+      return tool.execute(id, params, signal, onUpdate, ctx);
     },
   });
 
   pi.registerTool({
     ...localWrite,
     async execute(id, params, signal, onUpdate, ctx) {
-      console.error(`[gondolin] write tool called, attachedVm=${attachedVm ? "YES" : "NO"}`);
       if (!attachedVm) {
         return localWrite.execute(id, params, signal, onUpdate, ctx);
       }
       const tool = createWriteTool(localCwd, {
         operations: createVmWriteOps(attachedVm, localCwd),
       });
-      return tool.execute(id, params, signal, onUpdate);
+      return tool.execute(id, params, signal, onUpdate, ctx);
     },
   });
 
   pi.registerTool({
     ...localEdit,
     async execute(id, params, signal, onUpdate, ctx) {
-      console.error(`[gondolin] edit tool called, attachedVm=${attachedVm ? "YES" : "NO"}`);
       if (!attachedVm) {
         return localEdit.execute(id, params, signal, onUpdate, ctx);
       }
       const tool = createEditTool(localCwd, {
         operations: createVmEditOps(attachedVm, localCwd),
       });
-      return tool.execute(id, params, signal, onUpdate);
+      return tool.execute(id, params, signal, onUpdate, ctx);
     },
   });
 
   pi.registerTool({
     ...localBash,
     async execute(id, params, signal, onUpdate, ctx) {
-      console.error(`[gondolin] bash tool called, attachedVm=${attachedVm ? "YES" : "NO"}`);
       if (!attachedVm) {
         return localBash.execute(id, params, signal, onUpdate, ctx);
       }
+
+      const customOps = createVmBashOps(attachedVm, localCwd);
       const tool = createBashTool(localCwd, {
-        operations: createVmBashOps(attachedVm, localCwd),
+        operations: customOps,
       });
-      return tool.execute(id, params, signal, onUpdate);
+      return tool.execute(id, params, signal, onUpdate, ctx);
     },
   });
 
   // Intercept user bash commands (! and !!) to route through VM if attached
-  pi.on("user_bash", (_event, ctx) => {
-    if (!attachedVm) return;
-    console.error(`[gondolin] user_bash intercepted, routing to VM`);
-    return { operations: createVmBashOps(attachedVm, localCwd) };
+  pi.on("user_bash", (event, ctx) => {
+    if (!attachedVm) {
+      return;
+    }
+    const ops = createVmBashOps(attachedVm, localCwd);
+    return { operations: ops };
   });
 
   // Hide host path from LLM when attached to VM
   pi.on("before_agent_start", async (event, ctx) => {
     if (!attachedVm) return;
-    
+
     // Replace host path with VM workspace path in system prompt
     // Completely hide the host path from the LLM
     let modified = event.systemPrompt.replace(
       `Current working directory: ${localCwd}`,
       `Current working directory: ${WORKSPACE}`
     );
-    
-    console.error(`[gondolin] system prompt modified: hiding host path, showing VM path`);
+
     return { systemPrompt: modified };
   });
 
   pi.registerCommand("gondolin", {
-    description: "Manage Gondolin VMs (start <name> | stop <name-or-id> | list | attach [name-or-id] | detach | snapshot <name> | restore <snapshot> | snapshots)",
+    description: "Manage Gondolin VMs (start [name] | stop [name-or-id] | list | attach [name-or-id] | detach | snapshot <name> | restore <snapshot> | snapshots)",
     async handler(args, ctx) {
       // Capture current session ID on first command
       if (!currentSessionId) {
@@ -247,16 +259,11 @@ export default function (pi: ExtensionAPI) {
       }
 
       const [cmd, ...restArgs] = args.trim().split(/\s+/);
-      const name = restArgs[0];
+      const name = restArgs[0] || "default";
 
       try {
         switch (cmd) {
           case "start": {
-            if (!name) {
-              ctx.ui.notify("Usage: /gondolin start <name>", "warning");
-              return;
-            }
-
             if (vms.has(name)) {
               ctx.ui.notify(`VM already exists: ${name}`, "warning");
               return;
@@ -266,35 +273,56 @@ export default function (pi: ExtensionAPI) {
 
             const sessionLabel = `${PI_PREFIX}${currentSessionId || "ephemeral"}:${name}`;
 
-            const vm = await VM.create({
+            // Enable network access: unrestricted DNS and HTTP/HTTPS
+            const { httpHooks } = createHttpHooks({
+              allowedHosts: ["*"], // Allow all hosts
+              // blockInternalRanges: false, // Don't block internal IPs
+            });
+
+
+            const env: Record<string, string> = {};
+
+            // Build VM creation options
+            const vmCreateOptions: any = {
               sessionLabel,
+              httpHooks,
+              env,
               vfs: {
                 mounts: {
                   [WORKSPACE]: new RealFSProvider(localCwd),
                 },
               },
-            });
+            };
+
+            // Use custom guest image if GONDOLIN_GUEST_DIR is set
+            if (process.env.GONDOLIN_GUEST_DIR) {
+              vmCreateOptions.sandbox = {
+                imagePath: process.env.GONDOLIN_GUEST_DIR,
+              };
+            }
+
+            const vm = await VM.create(vmCreateOptions);
 
             await vm.exec("echo 'VM started'", { cwd: WORKSPACE });
 
             vms.set(name, vm);
             vmIds.set(vm.id, name);
+
+            // Also add to persistent global registry so it survives /reload
+            globalThis.gondolinVmRegistry.set(name, { name, vm });
+
             ctx.ui.notify(`Started: ${name}\nID: ${vm.id}\nRun '/gondolin list' to see it`, "success");
             break;
           }
 
           case "stop": {
-            if (!name) {
-              ctx.ui.notify("Usage: /gondolin stop <name-or-id>", "warning");
-              return;
-            }
-
             const session = await findSession(name);
             if (!session) {
               ctx.ui.notify(`VM not found: ${name}`, "error");
               return;
             }
 
+            // Try to close via local reference if we have it
             const vmName = vmIds.get(session.id);
             if (vmName && vms.has(vmName)) {
               try {
@@ -302,13 +330,22 @@ export default function (pi: ExtensionAPI) {
                 if (vm) {
                   await vm.close();
                 }
-              } catch {}
+              } catch (err) {
+                ctx.ui.notify(`Error closing VM: ${err}`, "error");
+              }
               vms.delete(vmName);
               vmIds.delete(session.id);
+
+              // Also remove from persistent registry
+              globalThis.gondolinVmRegistry.delete(vmName);
+
+              // If this was the attached VM, detach it
+              if (attachedVm && vmIds.get(attachedVm.id) === vmName) {
+                attachedVm = null;
+              }
             } else {
-              try {
-                process.kill(session.pid, 'SIGTERM');
-              } catch {}
+              // VM not in our registry, try to clean up via daemon
+              ctx.ui.notify(`VM ${session.label || session.id.substring(0, 8)} found but not locally managed`, "warning");
             }
 
             ctx.ui.notify(`Stopped: ${session.label || session.id.substring(0, 8)}`, "success");
@@ -325,44 +362,44 @@ export default function (pi: ExtensionAPI) {
             let vmName = "unknown";
             let foundSession: any = null;
 
-            if (name) {
-              if (vms.has(name)) {
-                vmToAttach = vms.get(name) || null;
-                vmName = name;
-              } else {
-                const session = await findSession(name);
-                if (session) {
-                  foundSession = session;
-                  if (vmIds.has(session.id)) {
-                    vmName = vmIds.get(session.id) || "unknown";
-                    vmToAttach = vms.get(vmName) || null;
-                  } else {
-                    vmName = name;
-                  }
-                }
-              }
+            // Try to attach using the provided name (or "default" if none provided)
+            if (vms.has(name)) {
+              vmToAttach = vms.get(name) || null;
+              vmName = name;
             } else {
-              const sessions = await listSessions();
-              const currentVMs = sessions.filter(s => {
-                const label = s.label || "";
-                if (!label.startsWith(PI_PREFIX)) return false;
-                const parts = label.split(":");
-                return parts[1] === (currentSessionId || "ephemeral");
-              });
+              const session = await findSession(name);
+              if (session) {
+                foundSession = session;
+                if (vmIds.has(session.id)) {
+                  vmName = vmIds.get(session.id) || "unknown";
+                  vmToAttach = vms.get(vmName) || null;
+                } else {
+                  vmName = name;
+                }
+              } else if (name === "default") {
+                // Name was "default" but not found, try auto-detect
+                const sessions = await listSessions();
+                const currentVMs = sessions.filter(s => {
+                  const label = s.label || "";
+                  if (!label.startsWith(PI_PREFIX)) return false;
+                  const parts = label.split(":");
+                  return parts[1] === (currentSessionId || "ephemeral");
+                });
 
-              if (currentVMs.length === 0) {
-                ctx.ui.notify("No VMs found in current session", "warning");
-                return;
+                if (currentVMs.length === 0) {
+                  ctx.ui.notify("No VMs found in current session", "warning");
+                  return;
+                }
+
+                if (currentVMs.length > 1) {
+                  ctx.ui.notify("Multiple VMs found. Specify one: /gondolin attach <name-or-id>", "warning");
+                  return;
+                }
+
+                foundSession = currentVMs[0];
+                vmName = vmIds.get(foundSession.id) || "unknown";
+                vmToAttach = vms.get(vmName) || null;
               }
-
-              if (currentVMs.length > 1) {
-                ctx.ui.notify("Multiple VMs found. Specify one: /gondolin attach <name-or-id>", "warning");
-                return;
-              }
-
-              foundSession = currentVMs[0];
-              vmName = vmIds.get(foundSession.id) || "unknown";
-              vmToAttach = vms.get(vmName) || null;
             }
 
             if (foundSession && !foundSession.alive) {
@@ -371,13 +408,12 @@ export default function (pi: ExtensionAPI) {
             }
 
             if (!vmToAttach) {
-              ctx.ui.notify(`VM not found: ${name || "default"}\nStart one: /gondolin start <name>`, "error");
+              ctx.ui.notify(`VM not found: ${name}\nStart one: /gondolin start <name>`, "error");
               return;
             }
 
             // Attach the VM
             attachedVm = vmToAttach;
-            console.error(`[gondolin] ATTACHED to VM: ${vmName}`);
 
             ctx.ui.notify(`Attached to VM: ${vmName}\nAll tools (read, write, edit, bash) now route through the VM`, "success");
             break;
@@ -389,9 +425,10 @@ export default function (pi: ExtensionAPI) {
               return;
             }
 
-            // Detach
+            // Just detach (don't close the VM, it continues running)
+            const vmId = attachedVm.id;
+            const vmName = vmIds.get(vmId) || "unknown";
             attachedVm = null;
-            console.error(`[gondolin] DETACHED from VM`);
 
             ctx.ui.notify("Detached from VM. Tools restored to host", "success");
             break;
@@ -490,30 +527,19 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     try {
-      const sessions = await listSessions();
+      // On reload, don't close VMs - just detach and clear local state
+      // VMs are preserved in globalThis.gondolinVmRegistry and will be reloaded on next startup
 
-      const currentSessionVMs = sessions.filter(s => {
-        const label = s.label || "";
-        if (!label.startsWith(PI_PREFIX)) {
-          return false;
-        }
-
-        const parts = label.split(":");
-        const vmSessionId = parts[1];
-        return vmSessionId === (currentSessionId || "ephemeral");
-      });
-
-      for (const session of currentSessionVMs) {
-        try {
-          process.kill(session.pid, 'SIGTERM');
-        } catch {}
+      // Just detach from any attached VM
+      if (attachedVm) {
+        attachedVm = null;
       }
 
+      // Clear local references (they'll be reloaded on startup)
       vms.clear();
       vmIds.clear();
-      attachedVm = null;
     } catch (error) {
-      // Suppress errors during shutdown
+      // Silently handle errors during shutdown
     }
   });
 }
