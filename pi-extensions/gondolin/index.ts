@@ -96,6 +96,21 @@ function shQuote(value: string): string {
   return "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
+/**
+ * Extract UUID from session filename
+ * Handles filenames like: 2026-02-23T21-25-57-602Z_f6d80712-69d3-4dfb-86f6-43167d0c813al.json
+ * Returns only the UUID part: f6d80712-69d3-4dfb-86f6-43167d0c813al
+ */
+function extractSessionUUID(filename: string): string {
+  // Remove .json extension
+  const withoutExt = filename.replace(".json", "");
+  
+  // If there's an underscore, take the part after it (UUID)
+  // Otherwise, return the whole thing (for backward compatibility)
+  const parts = withoutExt.split("_");
+  return parts.length > 1 ? parts[parts.length - 1] : withoutExt;
+}
+
 function isVmInCurrentSession(sessionLabel: string, currentSessionId: string): boolean {
   return sessionLabel.startsWith(PI_PREFIX) && sessionLabel.split(":")[1] === currentSessionId;
 }
@@ -300,7 +315,7 @@ export default function (pi: ExtensionAPI) {
           if (!currentSessionId) {
             const sessionFile = ctx.sessionManager.getSessionFile();
             const filename = sessionFile?.split("/").pop() || "ephemeral";
-            currentSessionId = filename.replace(".json", "");
+            currentSessionId = extractSessionUUID(filename);
           }
           
           const buildResult = await buildVMOptions({
@@ -408,7 +423,7 @@ export default function (pi: ExtensionAPI) {
       if (!currentSessionId) {
         const sessionFile = ctx.sessionManager.getSessionFile();
         const filename = sessionFile?.split("/").pop() || "ephemeral";
-        currentSessionId = filename.replace(".json", "");
+        currentSessionId = extractSessionUUID(filename);
       }
 
       const [cmd, ...restArgs] = args.trim().split(/\s+/);
