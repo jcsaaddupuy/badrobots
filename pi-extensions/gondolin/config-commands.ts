@@ -1,0 +1,485 @@
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { getConfig, setConfig, expandSkillPaths, GondolinConfig } from "./config";
+import { ConfigEditor } from "./config-editor";
+import fs from "node:fs";
+import path from "node:path";
+
+/**
+ * TUI Configuration Commands for Gondolin
+ * Handles: /gondolin config cwd, /gondolin config skills, /gondolin config auto-attach
+ */
+
+export async function handleConfigCommand(
+  args: string,
+  ctx: any
+): Promise<void> {
+  const [subCmd, ...subArgs] = args.trim().split(/\s+/);
+
+  switch (subCmd) {
+    case "cwd":
+      await handleCwdConfig(ctx);
+      break;
+    case "skills":
+      await handleSkillsConfig(ctx);
+      break;
+    case "auto-attach":
+      await handleAutoAttachConfig(ctx);
+      break;
+    case "view":
+      await handleViewConfig(ctx);
+      break;
+    case "edit":
+      await handleEditConfig(ctx);
+      break;
+    case "reset":
+      await handleResetConfig(ctx);
+      break;
+    default:
+      ctx.ui.notify(
+        `Usage: /gondolin config {cwd | skills | auto-attach | edit | view | reset}`,
+        "info"
+      );
+  }
+}
+
+/**
+ * Handle: /gondolin config cwd
+ * Toggle CWD mounting on/off
+ */
+async function handleCwdConfig(ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+    const current = config.workspace.mountCwd;
+
+    ctx.ui.notify(
+      `CWD Mounting Configuration\n\n` +
+        `Current: ${current ? "[ON]" : "[OFF]"}\n\n` +
+        `When ON (enabled):\n` +
+        `  • Your current working directory is mounted to /root/workspace\n` +
+        `  • Tools can read and modify files in the VM\n` +
+        `  • This is the default behavior\n\n` +
+        `When OFF (disabled):\n` +
+        `  • VM gets an empty /root/workspace (MemoryProvider)\n` +
+        `  • Complete filesystem isolation\n` +
+        `  • You can still access files via skills or explicit mounts`,
+      "info"
+    );
+
+    // Show toggle options
+    const newValue = !current;
+    const message =
+      `Change to: [${newValue ? "ON" : "OFF"}]?\n\n` +
+      `Type YES to confirm, or anything else to cancel.`;
+
+    ctx.ui.notify(message, "question");
+    
+    // For now, we'll just show the option but require manual entry
+    // In a full TUI implementation, this would be an interactive prompt
+    ctx.ui.notify(
+      `To toggle CWD mounting:\n\n` +
+      `  /gondolin config cwd ${newValue ? "on" : "off"}`,
+      "info"
+    );
+  } catch (error) {
+    ctx.ui.notify(`Error loading config: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config cwd on|off
+ * Set CWD mounting explicitly
+ */
+export async function setCwdMounting(
+  value: boolean,
+  ctx: any
+): Promise<void> {
+  try {
+    const config = await getConfig();
+    const oldValue = config.workspace.mountCwd;
+
+    config.workspace.mountCwd = value;
+    await setConfig(config);
+
+    const action = value ? "enabled" : "disabled";
+    ctx.ui.notify(
+      `CWD mounting ${action}\n\n` +
+        `Previous: ${oldValue ? "ON" : "OFF"}\n` +
+        `Now: ${value ? "ON" : "OFF"}\n\n` +
+        `This will apply to new VMs created with /gondolin start`,
+      "success"
+    );
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config skills
+ * Interactive skills mounting configuration
+ */
+async function handleSkillsConfig(ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+    const skills = config.skills;
+
+    let status = `Skills Mounting Configuration\n\n`;
+    status += `Status:\n`;
+    status += `  ${skills.enabled ? "[✓]" : "[ ]"} Enable skills mounting\n`;
+    status += `  ${skills.mountDefault ? "[✓]" : "[ ]"} Mount default skills (~/.pi/agent/skills)\n`;
+    status += `  ${skills.readOnly ? "[✓]" : "[ ]"} Read-only access (prevent modifications)\n`;
+    status += `\nCustom skill paths: ${skills.customPaths.length || "none"}\n`;
+    if (skills.customPaths.length > 0) {
+      skills.customPaths.forEach((p, i) => {
+        status += `  ${i + 1}. ${p}\n`;
+      });
+    }
+
+    ctx.ui.notify(status, "info");
+
+    // Show available actions
+    const actions =
+      `Available actions:\n` +
+      `  /gondolin config skills enable          - Toggle skills mounting\n` +
+      `  /gondolin config skills default         - Toggle default skills mount\n` +
+      `  /gondolin config skills read-only       - Toggle read-only mode\n` +
+      `  /gondolin config skills add <path>      - Add custom skill path\n` +
+      `  /gondolin config skills remove <index>  - Remove custom skill path\n`;
+
+    ctx.ui.notify(actions, "info");
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Set individual skill options
+ */
+export async function setSkillsOption(
+  option: "enable" | "default" | "read-only",
+  value?: boolean,
+  ctx?: any
+): Promise<void> {
+  try {
+    const config = await getConfig();
+    const skills = config.skills;
+
+    const oldValue =
+      option === "enable"
+        ? skills.enabled
+        : option === "default"
+          ? skills.mountDefault
+          : skills.readOnly;
+
+    const newValue = value !== undefined ? value : !oldValue;
+
+    if (option === "enable") {
+      skills.enabled = newValue;
+    } else if (option === "default") {
+      skills.mountDefault = newValue;
+    } else if (option === "read-only") {
+      skills.readOnly = newValue;
+    }
+
+    await setConfig(config);
+
+    if (ctx) {
+      const optionName =
+        option === "enable"
+          ? "Skills mounting"
+          : option === "default"
+            ? "Default skills mount"
+            : "Read-only mode";
+      const action = newValue ? "enabled" : "disabled";
+      ctx.ui.notify(
+        `${optionName} ${action}\n\n` +
+          `Previous: ${oldValue ? "ON" : "OFF"}\n` +
+          `Now: ${newValue ? "ON" : "OFF"}\n\n` +
+          `This will apply to new VMs created with /gondolin start`,
+        "success"
+      );
+    }
+  } catch (error) {
+    if (ctx) {
+      ctx.ui.notify(`Error: ${error}`, "error");
+    } else {
+      throw error;
+    }
+  }
+}
+
+/**
+ * Add custom skill path
+ */
+export async function addSkillPath(
+  skillPath: string,
+  ctx: any
+): Promise<void> {
+  try {
+    // Validate path exists
+    if (!fs.existsSync(skillPath)) {
+      ctx.ui.notify(
+        `Path does not exist: ${skillPath}`,
+        "error"
+      );
+      return;
+    }
+
+    // Expand path (handle ~ and env vars)
+    const { expanded, warnings } = expandSkillPaths([skillPath]);
+
+    if (warnings.length > 0) {
+      warnings.forEach(w => ctx.ui.notify(`Warning: ${w}`, "warning"));
+    }
+
+    const resolvedPath = expanded[0];
+
+    const config = await getConfig();
+    if (config.skills.customPaths.includes(resolvedPath)) {
+      ctx.ui.notify(
+        `Path already configured: ${resolvedPath}`,
+        "warning"
+      );
+      return;
+    }
+
+    config.skills.customPaths.push(resolvedPath);
+    await setConfig(config);
+
+    ctx.ui.notify(
+      `Added skill path:\n  ${resolvedPath}\n\n` +
+        `Total custom paths: ${config.skills.customPaths.length}\n` +
+        `This will apply to new VMs created with /gondolin start`,
+      "success"
+    );
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Remove custom skill path by index
+ */
+export async function removeSkillPath(
+  index: number,
+  ctx: any
+): Promise<void> {
+  try {
+    const config = await getConfig();
+
+    if (index < 0 || index >= config.skills.customPaths.length) {
+      ctx.ui.notify(`Invalid path index: ${index}`, "error");
+      return;
+    }
+
+    const removed = config.skills.customPaths.splice(index, 1)[0];
+    await setConfig(config);
+
+    ctx.ui.notify(
+      `Removed skill path:\n  ${removed}\n\n` +
+        `Total custom paths: ${config.skills.customPaths.length}`,
+      "success"
+    );
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config auto-attach
+ * Toggle auto-attach on session start
+ */
+async function handleAutoAttachConfig(ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+    const current = config.autoAttach;
+
+    ctx.ui.notify(
+      `Auto-Attach Configuration\n\n` +
+        `Current: ${current ? "[ON]" : "[OFF]"}\n\n` +
+        `When ON (enabled):\n` +
+        `  • Default VM is automatically created on session start\n` +
+        `  • VM uses current CWD and skills configuration\n` +
+        `  • You can detach with /gondolin detach\n\n` +
+        `When OFF (disabled):\n` +
+        `  • Manual /gondolin start required\n` +
+        `  • More control over VM lifecycle`,
+      "info"
+    );
+
+    ctx.ui.notify(
+      `To toggle auto-attach:\n\n` +
+        `  /gondolin config auto-attach ${current ? "off" : "on"}`,
+      "info"
+    );
+  } catch (error) {
+    ctx.ui.notify(`Error loading config: ${error}`, "error");
+  }
+}
+
+/**
+ * Set auto-attach value
+ */
+export async function setAutoAttach(
+  value: boolean,
+  ctx: any
+): Promise<void> {
+  try {
+    const config = await getConfig();
+    const oldValue = config.autoAttach;
+
+    config.autoAttach = value;
+    await setConfig(config);
+
+    const action = value ? "enabled" : "disabled";
+    ctx.ui.notify(
+      `Auto-attach ${action}\n\n` +
+        `Previous: ${oldValue ? "ON" : "OFF"}\n` +
+        `Now: ${value ? "ON" : "OFF"}\n\n` +
+        `Default VM name: ${config.workspace.defaultVmName}\n` +
+        `This will apply on the next session start`,
+      "success"
+    );
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config edit
+ * Open interactive configuration editor
+ */
+async function handleEditConfig(ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+
+    const result = await ctx.ui.custom<any>(
+      (tui, theme, keybindings, done) => {
+        const editor = new ConfigEditor(tui, theme, done, config);
+        return {
+          render: (width: number) => editor.render(width),
+          handleInput: (data: string) => editor.handleInput(data),
+          invalidate: () => editor.invalidate(),
+        };
+      },
+      {
+        overlay: true,
+        overlayOptions: {
+          width: "90%",
+          maxHeight: "90%",
+          anchor: "center",
+        },
+      }
+    );
+
+    if (result?.saved && result?.config) {
+      // Save the config
+      await setConfig(result.config);
+      ctx.ui.notify("Configuration saved!", "success");
+    } else if (result?.errors) {
+      ctx.ui.notify(
+        `Configuration validation failed:\n\n${result.errors.join("\n")}`,
+        "error"
+      );
+    }
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config view
+ * Display current configuration
+ */
+async function handleViewConfig(ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+
+    let output = `Gondolin Configuration\n`;
+    output += `${"=".repeat(50)}\n\n`;
+
+    output += `Workspace:\n`;
+    output += `  Mount CWD: ${config.workspace.mountCwd ? "ON" : "OFF"}\n`;
+    output += `  Default VM: ${config.workspace.defaultVmName}\n\n`;
+
+    output += `Skills:\n`;
+    output += `  Enabled: ${config.skills.enabled ? "ON" : "OFF"}\n`;
+    output += `  Mount default: ${config.skills.mountDefault ? "ON" : "OFF"}\n`;
+    output += `  Read-only: ${config.skills.readOnly ? "ON" : "OFF"}\n`;
+    output += `  Custom paths: ${config.skills.customPaths.length}\n`;
+    if (config.skills.customPaths.length > 0) {
+      config.skills.customPaths.forEach((p, i) => {
+        output += `    ${i + 1}. ${p}\n`;
+      });
+    }
+    output += `\n`;
+
+    output += `Session:\n`;
+    output += `  Auto-attach: ${config.autoAttach ? "ON" : "OFF"}\n\n`;
+
+    output += `Network:\n`;
+    output += `  Allowed hosts: ${config.network.allowedHosts.join(", ")}\n`;
+    output += `  Block internal: ${config.network.blockInternalRanges ? "ON" : "OFF"}\n\n`;
+
+    output += `Environment Variables: ${Object.keys(config.environment).length}\n`;
+    Object.entries(config.environment).forEach(([key, val]: [string, any]) => {
+      output += `  ${key}: ${val.type}${val.value ? ` (${val.value.substring(0, 30)}${val.value.length > 30 ? "..." : ""})` : ""}\n`;
+    });
+    output += `\n`;
+
+    output += `Secrets: ${Object.keys(config.secrets).length}\n`;
+    Object.entries(config.secrets).forEach(([key, val]: [string, any]) => {
+      output += `  ${key}: ${val.type} → hosts: ${val.hosts.join(", ")}\n`;
+    });
+
+    ctx.ui.notify(output, "info");
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config reset
+ * Reset config to defaults
+ */
+async function handleResetConfig(ctx: any): Promise<void> {
+  try {
+    ctx.ui.notify(
+      `To reset configuration to defaults, run:\n\n` +
+        `  /gondolin config reset confirm\n\n` +
+        `This will reload defaults from ~/.pi/agent/settings.json`,
+      "warning"
+    );
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Actually reset the config (requires confirmation)
+ */
+export async function confirmResetConfig(ctx: any): Promise<void> {
+  try {
+    const homeDir = process.env.HOME || "/root";
+    const settingsPath = path.join(homeDir, ".pi/agent/settings.json");
+
+    if (fs.existsSync(settingsPath)) {
+      // Read existing settings
+      const content = fs.readFileSync(settingsPath, "utf-8");
+      let settings = JSON.parse(content);
+
+      // Remove gondolin config
+      delete settings.gondolin;
+
+      // Write back
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+    }
+
+    ctx.ui.notify(
+      `Configuration reset to defaults\n\n` +
+        `Settings file: ${settingsPath}`,
+      "success"
+    );
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}

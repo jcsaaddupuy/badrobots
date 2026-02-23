@@ -12,6 +12,17 @@ import {
 import { VM, RealFSProvider, ReadonlyProvider, listSessions, findSession, createHttpHooks, gcSessions } from "@earendil-works/gondolin";
 import path from "node:path";
 import fs from "node:fs";
+import {
+  handleConfigCommand,
+  setCwdMounting,
+  setSkillsOption,
+  addSkillPath,
+  removeSkillPath,
+  setAutoAttach,
+  confirmResetConfig,
+} from "./config-commands";
+import { getConfig } from "./config";
+import { buildVMOptions, formatVMCreationWarnings, type VMCreationContext } from "./vm-builder";
 
 const PI_PREFIX = "pi:";
 const SESSION_MARKER = "◆";
@@ -244,6 +255,58 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     lastContext = ctx;
     updateStatusBar();
+
+    // Handle auto-attach if enabled
+    try {
+      const config = await getConfig();
+      if (config.autoAttach && !attachedVm) {
+        // Check if default VM already exists
+        const defaultVmName = config.workspace.defaultVmName;
+        if (vms.has(defaultVmName)) {
+          // Reuse existing default VM
+          attachedVm = vms.get(defaultVmName)!;
+          updateStatusBar();
+          ctx.ui.notify(`Auto-attached to: ${defaultVmName}`, "info");
+          return;
+        }
+
+        // Create new default VM with current config
+        try {
+          const buildResult = await buildVMOptions({
+            vmName: defaultVmName,
+            localCwd: process.cwd(),
+            sessionId: currentSessionId || "ephemeral",
+            config,
+          });
+
+          const vm = await VM.create(buildResult.options);
+          await vm.exec("echo 'VM started'", { cwd: "/root/workspace" });
+
+          vms.set(defaultVmName, vm);
+          vmIds.set(vm.id, defaultVmName);
+          if (buildResult.skillPaths.length > 0) {
+            vmSkillExceptions.set(defaultVmName, buildResult.skillPaths);
+          }
+          globalThis.gondolinVmRegistry.set(defaultVmName, { name: defaultVmName, vm });
+
+          // Auto-attach to the created VM
+          attachedVm = vm;
+          updateStatusBar();
+
+          if (buildResult.warnings.length > 0) {
+            const warningText = formatVMCreationWarnings(buildResult.warnings);
+            ctx.ui.notify(`Auto-attached to: ${defaultVmName}\n${warningText}`, "success");
+          } else {
+            ctx.ui.notify(`Auto-attached to: ${defaultVmName}`, "success");
+          }
+        } catch (err) {
+          // Fail silently with notification
+          ctx.ui.notify(`Failed to auto-attach: ${err}`, "warning");
+        }
+      }
+    } catch (err) {
+      // Silently ignore config loading errors on session start
+    }
   });
 
   // Clear status on session shutdown
@@ -306,7 +369,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("gondolin", {
-    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach | gc)",
+    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach | gc | config [cwd|skills|auto-attach|view|reset])",
     async handler(args, ctx) {
       if (!currentSessionId) {
         const sessionFile = ctx.sessionManager.getSessionFile();
@@ -315,10 +378,97 @@ export default function (pi: ExtensionAPI) {
       }
 
       const [cmd, ...restArgs] = args.trim().split(/\s+/);
-      const mountSkills = restArgs.includes("--mount-skills");
-      const name = restArgs.find(arg => !arg.startsWith("-")) || "default";
+      const restArgsStr = restArgs.join(" ");
 
       try {
+        // Handle config subcommands
+        if (cmd === "config") {
+          const [subCmd, ...configArgs] = restArgs;
+          const configArgsStr = configArgs.join(" ");
+
+          switch (subCmd) {
+            case "cwd": {
+              if (configArgs.length === 0) {
+                await handleConfigCommand("cwd", ctx);
+              } else if (configArgs[0] === "on") {
+                await setCwdMounting(true, ctx);
+              } else if (configArgs[0] === "off") {
+                await setCwdMounting(false, ctx);
+              } else {
+                ctx.ui.notify("Usage: /gondolin config cwd [on|off]", "info");
+              }
+              return;
+            }
+
+            case "skills": {
+              if (configArgs.length === 0) {
+                await handleConfigCommand("skills", ctx);
+              } else if (configArgs[0] === "enable") {
+                await setSkillsOption("enable", undefined, ctx);
+              } else if (configArgs[0] === "default") {
+                await setSkillsOption("default", undefined, ctx);
+              } else if (configArgs[0] === "read-only") {
+                await setSkillsOption("read-only", undefined, ctx);
+              } else if (configArgs[0] === "add" && configArgs.length > 1) {
+                const skillPath = configArgs.slice(1).join(" ");
+                await addSkillPath(skillPath, ctx);
+              } else if (configArgs[0] === "remove" && configArgs.length > 1) {
+                const index = parseInt(configArgs[1], 10) - 1;
+                await removeSkillPath(index, ctx);
+              } else {
+                ctx.ui.notify(
+                  "Usage: /gondolin config skills {enable|default|read-only|add <path>|remove <index>}",
+                  "info"
+                );
+              }
+              return;
+            }
+
+            case "auto-attach": {
+              if (configArgs.length === 0) {
+                await handleConfigCommand("auto-attach", ctx);
+              } else if (configArgs[0] === "on") {
+                await setAutoAttach(true, ctx);
+              } else if (configArgs[0] === "off") {
+                await setAutoAttach(false, ctx);
+              } else {
+                ctx.ui.notify("Usage: /gondolin config auto-attach [on|off]", "info");
+              }
+              return;
+            }
+
+            case "view": {
+              await handleConfigCommand("view", ctx);
+              return;
+            }
+
+            case "reset": {
+              if (configArgs[0] === "confirm") {
+                await confirmResetConfig(ctx);
+              } else {
+                await handleConfigCommand("reset", ctx);
+              }
+              return;
+            }
+
+            case "edit": {
+              await handleConfigCommand("edit", ctx);
+              return;
+            }
+
+            default:
+              ctx.ui.notify(
+                "Usage: /gondolin config {cwd [on|off] | skills {enable|default|read-only|add <path>|remove <index>} | auto-attach [on|off] | edit | view | reset}",
+                "info"
+              );
+              return;
+          }
+        }
+
+        // Original gondolin commands
+        const mountSkills = restArgs.includes("--mount-skills");
+        const name = restArgs.find(arg => !arg.startsWith("-")) || "default";
+
         switch (cmd) {
           case "start": {
             if (vms.has(name)) {
@@ -327,44 +477,55 @@ export default function (pi: ExtensionAPI) {
             }
 
             ctx.ui.notify(`Starting ${name}...`, "info");
-            const sessionLabel = `${PI_PREFIX}${currentSessionId}:${name}`;
-            const { httpHooks } = createHttpHooks({ allowedHosts: ["*"] });
 
-            const vmCreateOptions: any = {
-              sessionLabel,
-              httpHooks,
-              env: {},
-              vfs: { mounts: { [WORKSPACE]: new RealFSProvider(localCwd) } },
-            };
+            try {
+              // Load configuration
+              const config = await getConfig();
 
-            if (mountSkills) {
-              try {
-                const skills = await discoverSkills();
-                const homeDir = process.env.HOME || "/root";
-                const skillsBaseDir = path.join(homeDir, ".pi/agent/skills");
-                vmCreateOptions.vfs.mounts["/root/.pi/agent/skills"] = new ReadonlyProvider(new RealFSProvider(skillsBaseDir));
-                ctx.ui.notify(`Mounting ${skills.length} skills read-only`, "info");
-              } catch (err) {
-                ctx.ui.notify(`Error mounting skills: ${err}`, "error");
-                return;
+              // Build VM options from config
+              const buildResult = await buildVMOptions({
+                vmName: name,
+                localCwd,
+                sessionId: currentSessionId || "ephemeral",
+                config,
+                overrides: {
+                  mountCwd: mountSkills ? undefined : (restArgs.includes("--mount-cwd") ? true : undefined),
+                  mountSkills: restArgs.includes("--mount-skills") ? true : undefined,
+                  skillsReadOnly: restArgs.includes("--writable-skills") ? false : undefined,
+                },
+              });
+
+              const vmCreateOptions = buildResult.options;
+
+              // Notify about any warnings
+              if (buildResult.warnings.length > 0) {
+                const warningText = formatVMCreationWarnings(buildResult.warnings);
+                ctx.ui.notify(warningText, "warning");
               }
+
+              // Create VM
+              const vm = await VM.create(vmCreateOptions);
+              await vm.exec("echo 'VM started'", { cwd: "/root/workspace" });
+
+              // Register VM
+              vms.set(name, vm);
+              vmIds.set(vm.id, name);
+              if (buildResult.skillPaths.length > 0) {
+                vmSkillExceptions.set(name, buildResult.skillPaths);
+              }
+              globalThis.gondolinVmRegistry.set(name, { name, vm });
+
+              const details =
+                `Started: ${name}\n` +
+                `ID: ${vm.id}\n` +
+                `CWD mount: ${config.workspace.mountCwd ? "ON" : "OFF"}\n` +
+                `Skills: ${config.skills.enabled ? "ON" : "OFF"}${config.skills.readOnly ? " (read-only)" : ""}`
+              ;
+
+              ctx.ui.notify(details, "success");
+            } catch (err) {
+              ctx.ui.notify(`Error starting VM: ${err}`, "error");
             }
-
-            if (process.env.GONDOLIN_GUEST_DIR) {
-              vmCreateOptions.sandbox = { imagePath: process.env.GONDOLIN_GUEST_DIR };
-            }
-
-            const vm = await VM.create(vmCreateOptions);
-            await vm.exec("echo 'VM started'", { cwd: WORKSPACE });
-
-            vms.set(name, vm);
-            vmIds.set(vm.id, name);
-            if (mountSkills) {
-              vmSkillExceptions.set(name, getSkillPaths());
-            }
-            globalThis.gondolinVmRegistry.set(name, { name, vm });
-
-            ctx.ui.notify(`Started: ${name}\nID: ${vm.id}`, "success");
             break;
           }
 
@@ -579,7 +740,7 @@ export default function (pi: ExtensionAPI) {
           }
 
           default:
-            ctx.ui.notify("Usage: /gondolin {start <name> [--mount-skills] | stop [name-or-id|session|all] | list | attach [name] | detach | gc}", "info");
+            ctx.ui.notify("Usage: /gondolin {start <name> [--mount-skills] | stop [name-or-id|session|all] | list | attach [name] | detach | gc | config [...]}", "info");
         }
       } catch (error) {
         ctx.ui.notify(`Error: ${error}`, "error");
