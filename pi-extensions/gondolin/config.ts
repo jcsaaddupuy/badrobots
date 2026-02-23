@@ -7,6 +7,7 @@ import fs from "node:fs";
 export interface GondolinConfig {
   workspace: {
     mountCwd: boolean;
+    cwdWritable: boolean;
     defaultVmName: string;
   };
   skills: {
@@ -41,6 +42,7 @@ export interface GondolinConfig {
 export const DEFAULT_CONFIG: GondolinConfig = {
   workspace: {
     mountCwd: true,
+    cwdWritable: false,
     defaultVmName: "default",
   },
   skills: {

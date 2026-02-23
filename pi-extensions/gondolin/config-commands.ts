@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { getConfig, setConfig, expandSkillPaths, GondolinConfig } from "./config";
-import { ConfigEditor } from "./config-editor";
+import { showGondolinSettings } from "./config-editor";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -350,37 +350,7 @@ export async function setAutoAttach(
  */
 async function handleEditConfig(ctx: any): Promise<void> {
   try {
-    const config = await getConfig();
-
-    const result = await ctx.ui.custom<any>(
-      (tui, theme, keybindings, done) => {
-        const editor = new ConfigEditor(tui, theme, done, config);
-        return {
-          render: (width: number) => editor.render(width),
-          handleInput: (data: string) => editor.handleInput(data),
-          invalidate: () => editor.invalidate(),
-        };
-      },
-      {
-        overlay: true,
-        overlayOptions: {
-          width: "90%",
-          maxHeight: "90%",
-          anchor: "center",
-        },
-      }
-    );
-
-    if (result?.saved && result?.config) {
-      // Save the config
-      await setConfig(result.config);
-      ctx.ui.notify("Configuration saved!", "success");
-    } else if (result?.errors) {
-      ctx.ui.notify(
-        `Configuration validation failed:\n\n${result.errors.join("\n")}`,
-        "error"
-      );
-    }
+    await showGondolinSettings(ctx);
   } catch (error) {
     ctx.ui.notify(`Error: ${error}`, "error");
   }

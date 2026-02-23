@@ -50,7 +50,9 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
   // Handle CWD mounting
   const mountCwd = overrides?.mountCwd ?? config.workspace.mountCwd;
   if (mountCwd) {
-    mounts[WORKSPACE] = new RealFSProvider(localCwd);
+    const cwdWritable = config.workspace.cwdWritable;
+    const Provider = cwdWritable ? RealFSProvider : ReadonlyProvider;
+    mounts[WORKSPACE] = new Provider(localCwd);
   } else {
     // Empty workspace when mounting disabled
     mounts[WORKSPACE] = new MemoryProvider();
