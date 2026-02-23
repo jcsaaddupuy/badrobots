@@ -51,8 +51,11 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
   const mountCwd = overrides?.mountCwd ?? config.workspace.mountCwd;
   if (mountCwd) {
     const cwdWritable = config.workspace.cwdWritable;
-    const Provider = cwdWritable ? RealFSProvider : ReadonlyProvider;
-    mounts[WORKSPACE] = new Provider(localCwd);
+    if (cwdWritable) {
+      mounts[WORKSPACE] = new RealFSProvider(localCwd);
+    } else {
+      mounts[WORKSPACE] = new ReadonlyProvider(new RealFSProvider(localCwd));
+    }
   } else {
     // Empty workspace when mounting disabled
     mounts[WORKSPACE] = new MemoryProvider();
@@ -64,7 +67,6 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
 
   if (mountSkills) {
     const skillsReadOnly = overrides?.skillsReadOnly ?? config.skills.readOnly;
-    const Provider = skillsReadOnly ? ReadonlyProvider : RealFSProvider;
 
     // Mount default skills
     if (config.skills.mountDefault) {
@@ -73,7 +75,10 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
 
       // Verify directory exists
       if (fs.existsSync(skillsBaseDir)) {
-        mounts["/root/.pi/agent/skills"] = new Provider(new RealFSProvider(skillsBaseDir));
+        const fsProvider = new RealFSProvider(skillsBaseDir);
+        mounts["/root/.pi/agent/skills"] = skillsReadOnly
+          ? new ReadonlyProvider(fsProvider)
+          : fsProvider;
         skillPaths.push(skillsBaseDir);
       } else {
         warnings.push(`Default skills directory not found: ${skillsBaseDir}`);
@@ -95,7 +100,10 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
 
         // Mount at a numbered path
         const guestPath = `/root/.pi/skills/${i}`;
-        mounts[guestPath] = new Provider(new RealFSProvider(skillPath));
+        const fsProvider = new RealFSProvider(skillPath);
+        mounts[guestPath] = skillsReadOnly
+          ? new ReadonlyProvider(fsProvider)
+          : fsProvider;
         skillPaths.push(skillPath);
       }
 
@@ -124,11 +132,14 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
   }
 
   // Build network hooks
-  const { httpHooks } = createHttpHooks({
+  const { httpHooks, env: secretsEnv } = createHttpHooks({
     allowedHosts: config.network.allowedHosts,
     blockInternalRanges: config.network.blockInternalRanges,
     secrets,
   });
+
+  // Merge secrets env into environment variables
+  Object.assign(env, secretsEnv);
 
   // Construct final VM options
   const vmCreateOptions: any = {

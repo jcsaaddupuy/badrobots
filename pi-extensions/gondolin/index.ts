@@ -260,10 +260,8 @@ export default function (pi: ExtensionAPI) {
     try {
       const config = await getConfig();
       if (config.autoAttach && !attachedVm) {
-        // Check if default VM already exists
         const defaultVmName = config.workspace.defaultVmName;
         if (vms.has(defaultVmName)) {
-          // Reuse existing default VM
           attachedVm = vms.get(defaultVmName)!;
           updateStatusBar();
           ctx.ui.notify(`Auto-attached to: ${defaultVmName}`, "info");
@@ -272,10 +270,17 @@ export default function (pi: ExtensionAPI) {
 
         // Create new default VM with current config
         try {
+          // Get session ID from context
+          if (!currentSessionId) {
+            const sessionFile = ctx.sessionManager.getSessionFile();
+            const filename = sessionFile?.split("/").pop() || "ephemeral";
+            currentSessionId = filename.replace(".json", "");
+          }
+          
           const buildResult = await buildVMOptions({
             vmName: defaultVmName,
             localCwd: process.cwd(),
-            sessionId: currentSessionId || "ephemeral",
+            sessionId: currentSessionId,
             config,
           });
 
@@ -289,7 +294,6 @@ export default function (pi: ExtensionAPI) {
           }
           globalThis.gondolinVmRegistry.set(defaultVmName, { name: defaultVmName, vm });
 
-          // Auto-attach to the created VM
           attachedVm = vm;
           updateStatusBar();
 
@@ -300,12 +304,11 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(`Auto-attached to: ${defaultVmName}`, "success");
           }
         } catch (err) {
-          // Fail silently with notification
           ctx.ui.notify(`Failed to auto-attach: ${err}`, "warning");
         }
       }
     } catch (err) {
-      // Silently ignore config loading errors on session start
+      // Silently ignore config loading errors
     }
   });
 
@@ -369,7 +372,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("gondolin", {
-    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach | gc | config [cwd|skills|auto-attach|view|reset])",
+    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach | gc | config [cwd|skills|auto-attach|environment|secrets|edit|view|reset])",
     async handler(args, ctx) {
       if (!currentSessionId) {
         const sessionFile = ctx.sessionManager.getSessionFile();
@@ -424,19 +427,6 @@ export default function (pi: ExtensionAPI) {
               return;
             }
 
-            case "auto-attach": {
-              if (configArgs.length === 0) {
-                await handleConfigCommand("auto-attach", ctx);
-              } else if (configArgs[0] === "on") {
-                await setAutoAttach(true, ctx);
-              } else if (configArgs[0] === "off") {
-                await setAutoAttach(false, ctx);
-              } else {
-                ctx.ui.notify("Usage: /gondolin config auto-attach [on|off]", "info");
-              }
-              return;
-            }
-
             case "view": {
               await handleConfigCommand("view", ctx);
               return;
@@ -456,9 +446,32 @@ export default function (pi: ExtensionAPI) {
               return;
             }
 
+            case "auto-attach": {
+              if (configArgs.length === 0) {
+                await handleConfigCommand("auto-attach", ctx);
+              } else if (configArgs[0] === "on") {
+                await setAutoAttach(true, ctx);
+              } else if (configArgs[0] === "off") {
+                await setAutoAttach(false, ctx);
+              } else {
+                ctx.ui.notify("Usage: /gondolin config auto-attach [on|off]", "info");
+              }
+              return;
+            }
+
+            case "environment": {
+              await handleConfigCommand(`environment ${configArgsStr}`, ctx);
+              return;
+            }
+
+            case "secrets": {
+              await handleConfigCommand(`secrets ${configArgsStr}`, ctx);
+              return;
+            }
+
             default:
               ctx.ui.notify(
-                "Usage: /gondolin config {cwd [on|off] | skills {enable|default|read-only|add <path>|remove <index>} | auto-attach [on|off] | edit | view | reset}",
+                "Usage: /gondolin config {cwd [on|off] | skills {enable|default|read-only|add <path>|remove <index>} | auto-attach [on|off] | environment {add|remove|list} | secrets {add|remove|list} | edit | view | reset}",
                 "info"
               );
               return;

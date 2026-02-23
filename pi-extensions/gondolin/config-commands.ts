@@ -25,6 +25,12 @@ export async function handleConfigCommand(
     case "auto-attach":
       await handleAutoAttachConfig(ctx);
       break;
+    case "environment":
+      await handleEnvironmentConfig(subArgs.join(" "), ctx);
+      break;
+    case "secrets":
+      await handleSecretsConfig(subArgs.join(" "), ctx);
+      break;
     case "view":
       await handleViewConfig(ctx);
       break;
@@ -36,7 +42,7 @@ export async function handleConfigCommand(
       break;
     default:
       ctx.ui.notify(
-        `Usage: /gondolin config {cwd | skills | auto-attach | edit | view | reset}`,
+        `Usage: /gondolin config {cwd | skills | auto-attach | environment | secrets | edit | view | reset}`,
         "info"
       );
   }
@@ -296,19 +302,11 @@ async function handleAutoAttachConfig(ctx: any): Promise<void> {
     ctx.ui.notify(
       `Auto-Attach Configuration\n\n` +
         `Current: ${current ? "[ON]" : "[OFF]"}\n\n` +
-        `When ON (enabled):\n` +
+        `When ON:\n` +
         `  • Default VM is automatically created on session start\n` +
-        `  • VM uses current CWD and skills configuration\n` +
-        `  • You can detach with /gondolin detach\n\n` +
-        `When OFF (disabled):\n` +
-        `  • Manual /gondolin start required\n` +
-        `  • More control over VM lifecycle`,
-      "info"
-    );
-
-    ctx.ui.notify(
-      `To toggle auto-attach:\n\n` +
-        `  /gondolin config auto-attach ${current ? "off" : "on"}`,
+        `  • VM uses current CWD and skills configuration\n\n` +
+        `When OFF:\n` +
+        `  • Manual /gondolin start required`,
       "info"
     );
   } catch (error) {
@@ -334,9 +332,7 @@ export async function setAutoAttach(
     ctx.ui.notify(
       `Auto-attach ${action}\n\n` +
         `Previous: ${oldValue ? "ON" : "OFF"}\n` +
-        `Now: ${value ? "ON" : "OFF"}\n\n` +
-        `Default VM name: ${config.workspace.defaultVmName}\n` +
-        `This will apply on the next session start`,
+        `Now: ${value ? "ON" : "OFF"}`,
       "success"
     );
   } catch (error) {
@@ -402,6 +398,151 @@ async function handleViewConfig(ctx: any): Promise<void> {
     });
 
     ctx.ui.notify(output, "info");
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config environment {add|remove|list}
+ */
+async function handleEnvironmentConfig(args: string, ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+    const parts = args.trim().split(/\s+/);
+    const action = parts[0];
+
+    switch (action) {
+      case "add": {
+        const name = parts[1];
+        if (!name) {
+          ctx.ui.notify(
+            `Usage: /gondolin config environment add NAME [value]\n` +
+            `Type will be: propagate (or use: static | reference)`,
+            "info"
+          );
+          return;
+        }
+        config.environment[name] = {
+          type: "propagate",
+          value: parts.slice(2).join(" ") || undefined,
+        };
+        await setConfig(config);
+        ctx.ui.notify(`Added environment variable: ${name}`, "success");
+        break;
+      }
+
+      case "remove": {
+        const name = parts[1];
+        if (!name) {
+          ctx.ui.notify(`Usage: /gondolin config environment remove NAME`, "info");
+          return;
+        }
+        if (config.environment[name]) {
+          delete config.environment[name];
+          await setConfig(config);
+          ctx.ui.notify(`Removed environment variable: ${name}`, "success");
+        } else {
+          ctx.ui.notify(`Environment variable not found: ${name}`, "error");
+        }
+        break;
+      }
+
+      case "list": {
+        if (Object.keys(config.environment).length === 0) {
+          ctx.ui.notify("No environment variables configured.", "info");
+          return;
+        }
+        let output = "Environment Variables:\n";
+        Object.entries(config.environment).forEach(([key, val]) => {
+          output += `\n${key}:\n`;
+          output += `  Type: ${val.type}\n`;
+          if (val.value) output += `  Value: ${val.value}\n`;
+        });
+        ctx.ui.notify(output, "info");
+        break;
+      }
+
+      default:
+        ctx.ui.notify(
+          `Usage: /gondolin config environment {add NAME|remove NAME|list}`,
+          "info"
+        );
+    }
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config secrets {add|remove|list}
+ */
+async function handleSecretsConfig(args: string, ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+    const parts = args.trim().split(/\s+/);
+    const action = parts[0];
+
+    switch (action) {
+      case "add": {
+        const name = parts[1];
+        if (!name) {
+          ctx.ui.notify(
+            `Usage: /gondolin config secrets add NAME [value] [hosts]\n` +
+            `Type will be: static (or use: propagate | reference)\n` +
+            `Hosts default to: *`,
+            "info"
+          );
+          return;
+        }
+        config.secrets[name] = {
+          type: "static",
+          value: parts[2] || undefined,
+          hosts: parts.slice(3).length > 0 ? parts.slice(3) : ["*"],
+        };
+        await setConfig(config);
+        ctx.ui.notify(`Added secret: ${name}`, "success");
+        break;
+      }
+
+      case "remove": {
+        const name = parts[1];
+        if (!name) {
+          ctx.ui.notify(`Usage: /gondolin config secrets remove NAME`, "info");
+          return;
+        }
+        if (config.secrets[name]) {
+          delete config.secrets[name];
+          await setConfig(config);
+          ctx.ui.notify(`Removed secret: ${name}`, "success");
+        } else {
+          ctx.ui.notify(`Secret not found: ${name}`, "error");
+        }
+        break;
+      }
+
+      case "list": {
+        if (Object.keys(config.secrets).length === 0) {
+          ctx.ui.notify("No secrets configured.", "info");
+          return;
+        }
+        let output = "Secrets:\n";
+        Object.entries(config.secrets).forEach(([key, val]) => {
+          output += `\n${key}:\n`;
+          output += `  Type: ${val.type}\n`;
+          if (val.value) output += `  Value: ${val.value}\n`;
+          output += `  Allowed hosts: ${val.hosts.join(", ")}\n`;
+        });
+        ctx.ui.notify(output, "info");
+        break;
+      }
+
+      default:
+        ctx.ui.notify(
+          `Usage: /gondolin config secrets {add NAME|remove NAME|list}`,
+          "info"
+        );
+    }
   } catch (error) {
     ctx.ui.notify(`Error: ${error}`, "error");
   }

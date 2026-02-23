@@ -1,9 +1,9 @@
 /**
- * Gondolin Configuration Editor - Using SettingsList
+ * Gondolin Configuration Editor - Using SettingsList with Env/Secrets Management
  */
 
 import { getSettingsListTheme } from "@mariozechner/pi-coding-agent";
-import { Container, type SettingItem, SettingsList, Text } from "@mariozechner/pi-tui";
+import { Container, type SettingItem, SettingsList } from "@mariozechner/pi-tui";
 import { getConfig, setConfig, type GondolinConfig } from "./config";
 
 export async function showGondolinSettings(ctx: any): Promise<void> {
@@ -53,6 +53,18 @@ export async function showGondolinSettings(ctx: any): Promise<void> {
         currentValue: config.network.blockInternalRanges ? "enabled" : "disabled",
         values: ["enabled", "disabled"],
       },
+      {
+        id: "environment",
+        label: `Environment Variables (${Object.keys(config.environment).length})`,
+        currentValue: "manage",
+        values: ["manage"],
+      },
+      {
+        id: "secrets",
+        label: `Secrets (${Object.keys(config.secrets).length})`,
+        currentValue: "manage",
+        values: ["manage"],
+      },
     ];
 
     const container = new Container();
@@ -67,9 +79,23 @@ export async function showGondolinSettings(ctx: any): Promise<void> {
 
     const settingsList = new SettingsList(
       items,
-      Math.min(items.length + 2, 15),
+      Math.min(items.length + 2, 20),
       getSettingsListTheme(),
       async (id, newValue) => {
+        // Handle special cases (environment, secrets)
+        if (id === "environment") {
+          done(undefined);
+          await manageEnvironmentVariables(ctx, config);
+          return;
+        }
+
+        if (id === "secrets") {
+          done(undefined);
+          await manageSecrets(ctx, config);
+          return;
+        }
+
+        // Handle boolean toggles
         const enabled = newValue === "enabled";
 
         switch (id) {
@@ -98,6 +124,239 @@ export async function showGondolinSettings(ctx: any): Promise<void> {
 
         // Save immediately
         await setConfig(config);
+      },
+      () => {
+        done(undefined);
+      }
+    );
+
+    container.addChild(settingsList);
+
+    return {
+      render(width: number) {
+        return container.render(width);
+      },
+      invalidate() {
+        container.invalidate();
+      },
+      handleInput(data: string) {
+        settingsList.handleInput?.(data);
+      },
+    };
+  });
+}
+
+async function manageEnvironmentVariables(ctx: any, config: GondolinConfig): Promise<void> {
+  const vars = Object.entries(config.environment);
+
+  await ctx.ui.custom((_tui, theme, _kb, done) => {
+    const items: SettingItem[] = vars.map(([name, setting]) => ({
+      id: name,
+      label: name,
+      currentValue: setting.type,
+      values: [setting.type],
+    }));
+
+    items.push({
+      id: "__add__",
+      label: "+ Add Variable",
+      currentValue: "add",
+      values: ["add"],
+    });
+
+    items.push({
+      id: "__back__",
+      label: "← Back to Settings",
+      currentValue: "back",
+      values: ["back"],
+    });
+
+    const container = new Container();
+    container.addChild(
+      new (class {
+        render(_width: number) {
+          return [
+            theme.fg("accent", "Environment Variables"),
+            "",
+            theme.fg("dim", "Select to edit/delete, or add new"),
+            "",
+          ];
+        }
+        invalidate() {}
+      })()
+    );
+
+    const settingsList = new SettingsList(
+      items,
+      Math.min(items.length + 2, 20),
+      getSettingsListTheme(),
+      async (id) => {
+        if (id === "__back__") {
+          done(undefined);
+          await showGondolinSettings(ctx);
+          return;
+        }
+
+        if (id === "__add__") {
+          done(undefined);
+          const name = await ctx.ui.input("Variable name: ");
+          if (!name) {
+            await manageEnvironmentVariables(ctx, config);
+            return;
+          }
+          const type = await ctx.ui.select("Type:", ["propagate", "static", "reference"], "propagate");
+          let value: string | undefined = undefined;
+          if (type !== "propagate") {
+            value = await ctx.ui.input("Value: ");
+            if (!value) {
+              ctx.ui.notify("Value required for static/reference types", "error");
+              await manageEnvironmentVariables(ctx, config);
+              return;
+            }
+          }
+
+          config.environment[name] = { type: type as any, value };
+          await setConfig(config);
+          await manageEnvironmentVariables(ctx, config);
+          return;
+        }
+
+        // Edit or delete existing variable
+        const current = config.environment[id];
+        const action = await ctx.ui.select(`${id}:`, ["Edit", "Delete"], "Edit");
+
+        if (action === "Delete") {
+          delete config.environment[id];
+          await setConfig(config);
+          await manageEnvironmentVariables(ctx, config);
+        } else {
+          const newValue = await ctx.ui.input(`Value (current: ${current.value || "none"}): `);
+          if (newValue !== null && newValue !== undefined && newValue !== "") {
+            config.environment[id].value = newValue;
+            await setConfig(config);
+          }
+          await manageEnvironmentVariables(ctx, config);
+        }
+      },
+      () => {
+        done(undefined);
+      }
+    );
+
+    container.addChild(settingsList);
+
+    return {
+      render(width: number) {
+        return container.render(width);
+      },
+      invalidate() {
+        container.invalidate();
+      },
+      handleInput(data: string) {
+        settingsList.handleInput?.(data);
+      },
+    };
+  });
+}
+
+async function manageSecrets(ctx: any, config: GondolinConfig): Promise<void> {
+  const secretsList = Object.entries(config.secrets);
+
+  await ctx.ui.custom((_tui, theme, _kb, done) => {
+    const items: SettingItem[] = secretsList.map(([name, setting]) => ({
+      id: name,
+      label: name,
+      currentValue: setting.type,
+      values: [setting.type],
+    }));
+
+    items.push({
+      id: "__add__",
+      label: "+ Add Secret",
+      currentValue: "add",
+      values: ["add"],
+    });
+
+    items.push({
+      id: "__back__",
+      label: "← Back to Settings",
+      currentValue: "back",
+      values: ["back"],
+    });
+
+    const container = new Container();
+    container.addChild(
+      new (class {
+        render(_width: number) {
+          return [
+            theme.fg("accent", "Secrets"),
+            "",
+            theme.fg("dim", "Select to edit/delete, or add new"),
+            "",
+          ];
+        }
+        invalidate() {}
+      })()
+    );
+
+    const settingsList = new SettingsList(
+      items,
+      Math.min(items.length + 2, 20),
+      getSettingsListTheme(),
+      async (id) => {
+        if (id === "__back__") {
+          done(undefined);
+          await showGondolinSettings(ctx);
+          return;
+        }
+
+        if (id === "__add__") {
+          done(undefined);
+          const name = await ctx.ui.input("Secret name: ");
+          if (!name) {
+            await manageSecrets(ctx, config);
+            return;
+          }
+          const type = await ctx.ui.select("Type:", ["propagate", "static", "reference"], "static");
+          let value: string | undefined = undefined;
+          if (type !== "propagate") {
+            value = await ctx.ui.input("Value: ");
+            if (!value) {
+              ctx.ui.notify("Value required for static/reference types", "error");
+              await manageSecrets(ctx, config);
+              return;
+            }
+          }
+          const hostsInput = await ctx.ui.input("Allowed hosts (comma-separated, default: *): ");
+          const hosts = hostsInput ? hostsInput.split(",").map(h => h.trim()) : ["*"];
+
+          config.secrets[name] = { type: type as any, value, hosts };
+          await setConfig(config);
+          await manageSecrets(ctx, config);
+          return;
+        }
+
+        // Edit or delete existing secret
+        const current = config.secrets[id];
+        const action = await ctx.ui.select(`${id}:`, ["Edit", "Delete"], "Edit");
+
+        if (action === "Delete") {
+          delete config.secrets[id];
+          await setConfig(config);
+          await manageSecrets(ctx, config);
+        } else {
+          const newValue = await ctx.ui.input(`Value (current: ${current.value || "none"}): `);
+          if (newValue !== null && newValue !== undefined && newValue !== "") {
+            config.secrets[id].value = newValue;
+            await setConfig(config);
+          }
+          const hostsInput = await ctx.ui.input(`Hosts (current: ${current.hosts.join(", ")}): `);
+          if (hostsInput && hostsInput.trim()) {
+            config.secrets[id].hosts = hostsInput.split(",").map(h => h.trim());
+            await setConfig(config);
+          }
+          await manageSecrets(ctx, config);
+        }
       },
       () => {
         done(undefined);

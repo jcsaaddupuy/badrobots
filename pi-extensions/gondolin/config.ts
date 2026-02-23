@@ -446,8 +446,11 @@ export function prepareSecretsForGondolin(
         value = process.env[secretName];
         if (!value) {
           warnings.push(
-            `Secret ${secretName} is set to propagate but not found in host environment`
+            `Secret ${secretName} is set to propagate but environment variable not found. ` +
+            `Make sure ${secretName} is set in your shell before starting Pi.`
           );
+          // Still try to add it - it might be set later or in a different way
+          // For now, skip it to avoid errors
           continue;
         }
       } else if (config.type === "static") {
