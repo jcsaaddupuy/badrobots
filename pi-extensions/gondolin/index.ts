@@ -9,7 +9,7 @@ import {
   type ReadOperations,
   type WriteOperations,
 } from "@mariozechner/pi-coding-agent";
-import { VM, RealFSProvider, ReadonlyProvider, listSessions, findSession, createHttpHooks } from "@earendil-works/gondolin";
+import { VM, RealFSProvider, ReadonlyProvider, listSessions, findSession, createHttpHooks, gcSessions } from "@earendil-works/gondolin";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -290,7 +290,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("gondolin", {
-    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach)",
+    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach | gc)",
     async handler(args, ctx) {
       if (!currentSessionId) {
         const sessionFile = ctx.sessionManager.getSessionFile();
@@ -358,6 +358,8 @@ export default function (pi: ExtensionAPI) {
               const vm = vms.get(vmName)!;
               try {
                 await vm.close();
+                // Cleanup stale sessions after VM stops
+                await gcSessions();
               } catch (err) {
                 ctx.ui.notify(`Error: ${err}`, "error");
               }
@@ -487,8 +489,30 @@ export default function (pi: ExtensionAPI) {
             break;
           }
 
+          case "gc": {
+            try {
+              const cleaned = await gcSessions();
+              ctx.ui.notify(cleaned === 0 ? "No stale sessions found" : `Cleaned up ${cleaned} stale session(s)`, "success");
+            } catch (err) {
+              ctx.ui.notify(`Error: ${err}`, "error");
+            }
+            break;
+          }
+
           case "list": {
             const sessions = await listSessions();
+            
+            // Cleanup stale sessions before listing
+            try {
+              const staleCount = await gcSessions();
+              if (staleCount > 0) {
+                // Re-list after cleanup
+                const updatedSessions = await listSessions();
+              }
+            } catch (err) {
+              // Ignore gc errors, just proceed with listing
+            }
+            
             if (sessions.length === 0) {
               ctx.ui.notify("No VMs", "info");
               return;
@@ -539,7 +563,7 @@ export default function (pi: ExtensionAPI) {
           }
 
           default:
-            ctx.ui.notify("Usage: /gondolin {start <name> [--mount-skills] | stop [name-or-id|session|all] | list | attach [name] | detach}", "info");
+            ctx.ui.notify("Usage: /gondolin {start <name> [--mount-skills] | stop [name-or-id|session|all] | list | attach [name] | detach | gc}", "info");
         }
       } catch (error) {
         ctx.ui.notify(`Error: ${error}`, "error");
