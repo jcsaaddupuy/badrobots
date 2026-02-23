@@ -65,6 +65,12 @@ export async function showGondolinSettings(ctx: any): Promise<void> {
         currentValue: "manage",
         values: ["manage"],
       },
+      {
+        id: "custom-mounts",
+        label: `Custom Mounts (${Object.keys(config.customMounts).length})`,
+        currentValue: "manage",
+        values: ["manage"],
+      },
     ];
 
     const container = new Container();
@@ -92,6 +98,12 @@ export async function showGondolinSettings(ctx: any): Promise<void> {
         if (id === "secrets") {
           done(undefined);
           await manageSecrets(ctx, config);
+          return;
+        }
+
+        if (id === "custom-mounts") {
+          done(undefined);
+          await manageCustomMounts(ctx, config);
           return;
         }
 
@@ -356,6 +368,122 @@ async function manageSecrets(ctx: any, config: GondolinConfig): Promise<void> {
             await setConfig(config);
           }
           await manageSecrets(ctx, config);
+        }
+      },
+      () => {
+        done(undefined);
+      }
+    );
+
+    container.addChild(settingsList);
+
+    return {
+      render(width: number) {
+        return container.render(width);
+      },
+      invalidate() {
+        container.invalidate();
+      },
+      handleInput(data: string) {
+        settingsList.handleInput?.(data);
+      },
+    };
+  });
+}
+
+async function manageCustomMounts(ctx: any, config: GondolinConfig): Promise<void> {
+  const mountsList = Object.entries(config.customMounts);
+
+  await ctx.ui.custom((_tui, theme, _kb, done) => {
+    const items: SettingItem[] = mountsList.map(([guestPath, mount]) => ({
+      id: guestPath,
+      label: `${guestPath} → ${mount.hostPath}${mount.writable ? " (rw)" : " (ro)"}`,
+      currentValue: "edit",
+      values: ["edit"],
+    }));
+
+    items.push({
+      id: "__add__",
+      label: "+ Add Mount",
+      currentValue: "add",
+      values: ["add"],
+    });
+
+    items.push({
+      id: "__back__",
+      label: "← Back to Settings",
+      currentValue: "back",
+      values: ["back"],
+    });
+
+    const container = new Container();
+    container.addChild(
+      new (class {
+        render(_width: number) {
+          return [
+            theme.fg("accent", "Custom Mounts"),
+            "",
+            theme.fg("dim", "Map host directories into the VM at custom paths"),
+            "",
+          ];
+        }
+        invalidate() {}
+      })()
+    );
+
+    const settingsList = new SettingsList(
+      items,
+      Math.min(items.length + 2, 20),
+      getSettingsListTheme(),
+      async (id) => {
+        if (id === "__back__") {
+          done(undefined);
+          await showGondolinSettings(ctx);
+          return;
+        }
+
+        if (id === "__add__") {
+          done(undefined);
+          const guestPath = await ctx.ui.input("Guest path (e.g., /mnt/data): ");
+          if (!guestPath) {
+            await manageCustomMounts(ctx, config);
+            return;
+          }
+
+          const hostPath = await ctx.ui.input("Host path (absolute path): ");
+          if (!hostPath) {
+            ctx.ui.notify("Host path is required", "error");
+            await manageCustomMounts(ctx, config);
+            return;
+          }
+
+          const writable = await ctx.ui.select("Writable?", ["yes", "no"], "no") === "yes";
+
+          config.customMounts[guestPath] = { hostPath, writable };
+          await setConfig(config);
+          await manageCustomMounts(ctx, config);
+          return;
+        }
+
+        // Edit or delete existing mount
+        const current = config.customMounts[id];
+        const action = await ctx.ui.select(`${id}:`, ["Edit", "Delete"], "Edit");
+
+        if (action === "Delete") {
+          delete config.customMounts[id];
+          await setConfig(config);
+          await manageCustomMounts(ctx, config);
+        } else {
+          const newHostPath = await ctx.ui.input(`Host path (current: ${current.hostPath}): `);
+          if (newHostPath && newHostPath.trim()) {
+            current.hostPath = newHostPath;
+          }
+
+          const writable = await ctx.ui.select("Writable?", ["yes", "no"], current.writable ? "yes" : "no") === "yes";
+          current.writable = writable;
+
+          await setConfig(config);
+          await manageCustomMounts(ctx, config);
         }
       },
       () => {

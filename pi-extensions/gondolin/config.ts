@@ -17,6 +17,12 @@ export interface GondolinConfig {
     readOnly: boolean;
   };
   autoAttach: boolean;
+  customMounts: {
+    [guestPath: string]: {
+      hostPath: string;
+      writable: boolean;
+    };
+  };
   network: {
     allowedHosts: string[];
     blockInternalRanges: boolean;
@@ -52,6 +58,7 @@ export const DEFAULT_CONFIG: GondolinConfig = {
     readOnly: true,
   },
   autoAttach: false,
+  customMounts: {},
   network: {
     allowedHosts: ["*"],
     blockInternalRanges: true,

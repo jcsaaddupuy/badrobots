@@ -594,3 +594,54 @@ export async function confirmResetConfig(ctx: any): Promise<void> {
     ctx.ui.notify(`Error: ${error}`, "error");
   }
 }
+
+/**
+ * Mount host Pi skills directory into VM via custom mounts
+ * This allows the VM to access the host's Pi skills
+ */
+export async function mountHostPiSkills(ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+    const homeDir = process.env.HOME || "/root";
+    const hostSkillsPath = path.join(homeDir, ".pi/agent/skills");
+
+    // Verify host skills directory exists
+    if (!fs.existsSync(hostSkillsPath)) {
+      ctx.ui.notify(
+        `Host Pi skills directory not found: ${hostSkillsPath}`,
+        "error"
+      );
+      return;
+    }
+
+    // Check if already mounted
+    const guestPath = "/mnt/pi-skills";
+    if (config.customMounts[guestPath]) {
+      ctx.ui.notify(
+        `Pi skills already mounted at: ${guestPath}\n` +
+        `Host path: ${config.customMounts[guestPath].hostPath}`,
+        "info"
+      );
+      return;
+    }
+
+    // Add to custom mounts
+    config.customMounts[guestPath] = {
+      hostPath: hostSkillsPath,
+      writable: false, // Read-only by default for safety
+    };
+
+    await setConfig(config);
+
+    ctx.ui.notify(
+      `✓ Host Pi skills mounted\n\n` +
+      `Guest path: ${guestPath}\n` +
+      `Host path: ${hostSkillsPath}\n` +
+      `Writable: No (read-only)\n\n` +
+      `The VM can now access host Pi skills at: ${guestPath}`,
+      "success"
+    );
+  } catch (error) {
+    ctx.ui.notify(`Error mounting Pi skills: ${error}`, "error");
+  }
+}

@@ -20,6 +20,7 @@ import {
   removeSkillPath,
   setAutoAttach,
   confirmResetConfig,
+  mountHostPiSkills,
 } from "./config-commands";
 import { getConfig } from "./config";
 import { buildVMOptions, formatVMCreationWarnings, type VMCreationContext } from "./vm-builder";
@@ -71,6 +72,7 @@ if (!globalThis.gondolinVmRegistry) {
 
 const vms = new Map<string, VM>();
 const vmIds = new Map<string, string>();
+const vmCustomMounts = new Map<string, { guestPath: string; hostPath: string; writable: boolean }[]>();
 let currentSessionId: string | undefined;
 let attachedVm: VM | null = null;
 let lastContext: any = null;
@@ -100,6 +102,7 @@ function isVmInCurrentSession(sessionLabel: string, currentSessionId: string): b
 function cleanupVm(vmName: string, vmId: string): void {
   vms.delete(vmName);
   vmIds.delete(vmId);
+  vmCustomMounts.delete(vmName);
   globalThis.gondolinVmRegistry.delete(vmName);
   if (attachedVm && vmIds.get(attachedVm.id) === vmName) {
     attachedVm = null;
@@ -107,7 +110,7 @@ function cleanupVm(vmName: string, vmId: string): void {
   }
 }
 
-function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptions?: string[]): string {
+function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): string {
   // Handle absolute paths that are already in guest format (starting with /root/workspace or /root/.pi)
   if (localPath.startsWith("/root/workspace") || localPath.startsWith("/root/.pi")) {
     // Normalize the path to resolve .. and . components, preventing directory traversal
@@ -117,6 +120,24 @@ function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptio
       return normalized;
     }
     throw new Error(`path escapes workspace: ${localPath}`);
+  }
+
+  // Check custom mounts first (highest priority)
+  if (customMounts?.length) {
+    try {
+      const canonicalPath = fs.realpathSync(localPath);
+      for (const mount of customMounts) {
+        const canonicalHostPath = fs.realpathSync(mount.hostPath);
+        if (canonicalPath === canonicalHostPath || canonicalPath.startsWith(canonicalHostPath + path.sep)) {
+          // Map the local path to the mounted guest path
+          const rel = path.relative(canonicalHostPath, canonicalPath);
+          const posixRel = rel.split(path.sep).join(path.posix.sep);
+          return path.posix.join(mount.guestPath, posixRel);
+        }
+      }
+    } catch {
+      // Fall through to skill paths check
+    }
   }
 
   if (exceptions?.length) {
@@ -146,21 +167,21 @@ function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptio
   return path.posix.join(WORKSPACE, posixRel);
 }
 
-function createVmReadOps(vm: VM, localCwd: string, exceptions?: string[]): ReadOperations {
+function createVmReadOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): ReadOperations {
   return {
     readFile: async (p) => {
-      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions);
+      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts);
       const r = await vm.exec(["/bin/cat", guestPath]);
       if (!r.ok) throw new Error(`cat failed (${r.exitCode}): ${r.stderr}`);
       return r.stdoutBuffer;
     },
     access: async (p) => {
-      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions);
+      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts);
       const r = await vm.exec(["/bin/sh", "-lc", `test -r ${shQuote(guestPath)}`]);
       if (!r.ok) throw new Error(`not readable: ${p}`);
     },
     detectImageMimeType: async (p) => {
-      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions);
+      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts);
       try {
         const r = await vm.exec(["/bin/sh", "-lc", `file --mime-type -b ${shQuote(guestPath)}`]);
         if (!r.ok) return null;
@@ -173,10 +194,10 @@ function createVmReadOps(vm: VM, localCwd: string, exceptions?: string[]): ReadO
   };
 }
 
-function createVmWriteOps(vm: VM, localCwd: string, exceptions?: string[]): WriteOperations {
+function createVmWriteOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): WriteOperations {
   return {
     writeFile: async (p, content) => {
-      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions);
+      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts);
       const dir = path.posix.dirname(guestPath);
       const b64 = Buffer.from(content, "utf8").toString("base64");
       const script = [`set -eu`, `mkdir -p ${shQuote(dir)}`, `echo ${shQuote(b64)} | base64 -d > ${shQuote(guestPath)}`].join("\n");
@@ -184,25 +205,25 @@ function createVmWriteOps(vm: VM, localCwd: string, exceptions?: string[]): Writ
       if (!r.ok) throw new Error(`write failed (${r.exitCode}): ${r.stderr}`);
     },
     mkdir: async (dir) => {
-      const guestDir = toGuestPathWithExceptions(localCwd, dir, exceptions);
+      const guestDir = toGuestPathWithExceptions(localCwd, dir, exceptions, customMounts);
       const r = await vm.exec(["/bin/mkdir", "-p", guestDir]);
       if (!r.ok) throw new Error(`mkdir failed (${r.exitCode}): ${r.stderr}`);
     },
   };
 }
 
-function createVmEditOps(vm: VM, localCwd: string, exceptions?: string[]): EditOperations {
-  const r = createVmReadOps(vm, localCwd, exceptions);
-  const w = createVmWriteOps(vm, localCwd, exceptions);
+function createVmEditOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): EditOperations {
+  const r = createVmReadOps(vm, localCwd, exceptions, customMounts);
+  const w = createVmWriteOps(vm, localCwd, exceptions, customMounts);
   return { readFile: r.readFile, access: r.access, writeFile: w.writeFile };
 }
 
-function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[]): BashOperations {
+function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): BashOperations {
   return {
     exec: async (command, cwd, { onData, signal, timeout, env: _env }) => {
       let guestCwd: string;
       try {
-        guestCwd = toGuestPathWithExceptions(localCwd, cwd, exceptions);
+        guestCwd = toGuestPathWithExceptions(localCwd, cwd, exceptions, customMounts);
       } catch (e) {
         throw e;
       }
@@ -292,6 +313,9 @@ export default function (pi: ExtensionAPI) {
           if (buildResult.skillPaths.length > 0) {
             vmSkillExceptions.set(defaultVmName, buildResult.skillPaths);
           }
+          if (buildResult.customMounts.length > 0) {
+            vmCustomMounts.set(defaultVmName, buildResult.customMounts);
+          }
           globalThis.gondolinVmRegistry.set(defaultVmName, { name: defaultVmName, vm });
 
           attachedVm = vm;
@@ -337,18 +361,19 @@ export default function (pi: ExtensionAPI) {
       }
       const vmName = vmIds.get(attachedVm.id) || "unknown";
       const exceptions = vmSkillExceptions.get(vmName);
+      const customMounts = vmCustomMounts.get(vmName);
       switch (type) {
         case "read":
-          return createReadTool(localCwd, { operations: createVmReadOps(attachedVm, localCwd, exceptions) })
+          return createReadTool(localCwd, { operations: createVmReadOps(attachedVm, localCwd, exceptions, customMounts) })
             .execute(id, params, signal, onUpdate, ctx);
         case "write":
-          return createWriteTool(localCwd, { operations: createVmWriteOps(attachedVm, localCwd, exceptions) })
+          return createWriteTool(localCwd, { operations: createVmWriteOps(attachedVm, localCwd, exceptions, customMounts) })
             .execute(id, params, signal, onUpdate, ctx);
         case "edit":
-          return createEditTool(localCwd, { operations: createVmEditOps(attachedVm, localCwd, exceptions) })
+          return createEditTool(localCwd, { operations: createVmEditOps(attachedVm, localCwd, exceptions, customMounts) })
             .execute(id, params, signal, onUpdate, ctx);
         case "bash":
-          return createBashTool(localCwd, { operations: createVmBashOps(attachedVm, localCwd, exceptions) })
+          return createBashTool(localCwd, { operations: createVmBashOps(attachedVm, localCwd, exceptions, customMounts) })
             .execute(id, params, signal, onUpdate, ctx);
       }
     };
@@ -363,7 +388,8 @@ export default function (pi: ExtensionAPI) {
     if (!attachedVm) return;
     const vmName = vmIds.get(attachedVm.id) || "unknown";
     const exceptions = vmSkillExceptions.get(vmName);
-    return { operations: createVmBashOps(attachedVm, localCwd, exceptions) };
+    const customMounts = vmCustomMounts.get(vmName);
+    return { operations: createVmBashOps(attachedVm, localCwd, exceptions, customMounts) };
   });
 
   pi.on("before_agent_start", (event, ctx) => {
@@ -372,7 +398,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("gondolin", {
-    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach | gc | config [cwd|skills|auto-attach|environment|secrets|edit|view|reset])",
+    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach | gc | config [cwd|skills|auto-attach|environment|secrets|mount-host-skills|edit|view|reset])",
     async handler(args, ctx) {
       if (!currentSessionId) {
         const sessionFile = ctx.sessionManager.getSessionFile();
@@ -469,9 +495,14 @@ export default function (pi: ExtensionAPI) {
               return;
             }
 
+            case "mount-host-skills": {
+              await mountHostPiSkills(ctx);
+              return;
+            }
+
             default:
               ctx.ui.notify(
-                "Usage: /gondolin config {cwd [on|off] | skills {enable|default|read-only|add <path>|remove <index>} | auto-attach [on|off] | environment {add|remove|list} | secrets {add|remove|list} | edit | view | reset}",
+                "Usage: /gondolin config {cwd [on|off] | skills {enable|default|read-only|add <path>|remove <index>} | auto-attach [on|off] | environment {add|remove|list} | secrets {add|remove|list} | mount-host-skills | edit | view | reset}",
                 "info"
               );
               return;
@@ -525,6 +556,9 @@ export default function (pi: ExtensionAPI) {
               vmIds.set(vm.id, name);
               if (buildResult.skillPaths.length > 0) {
                 vmSkillExceptions.set(name, buildResult.skillPaths);
+              }
+              if (buildResult.customMounts.length > 0) {
+                vmCustomMounts.set(name, buildResult.customMounts);
               }
               globalThis.gondolinVmRegistry.set(name, { name, vm });
 

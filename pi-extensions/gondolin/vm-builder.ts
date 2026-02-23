@@ -31,6 +31,7 @@ export interface BuildVMOptionsResult {
   options: any;
   warnings: string[];
   skillPaths: string[];
+  customMounts: { guestPath: string; hostPath: string; writable: boolean }[];
 }
 
 /**
@@ -111,6 +112,20 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
     }
   }
 
+  // Handle custom mounts
+  const customMounts: { guestPath: string; hostPath: string; writable: boolean }[] = [];
+  if (config.customMounts && Object.keys(config.customMounts).length > 0) {
+    for (const [guestPath, mount] of Object.entries(config.customMounts)) {
+      if (!fs.existsSync(mount.hostPath)) {
+        warnings.push(`Custom mount host path not found: ${mount.hostPath}`);
+        continue;
+      }
+      const fsProvider = new RealFSProvider(mount.hostPath);
+      mounts[guestPath] = mount.writable ? fsProvider : new ReadonlyProvider(fsProvider);
+      customMounts.push({ guestPath, hostPath: mount.hostPath, writable: mount.writable });
+    }
+  }
+
   // Build environment variables
   let env: Record<string, string> = {};
 
@@ -158,6 +173,7 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
     options: vmCreateOptions,
     warnings,
     skillPaths,
+    customMounts,
   };
 }
 
