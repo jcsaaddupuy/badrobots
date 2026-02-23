@@ -84,9 +84,10 @@ function updateStatusBar() {
     lastContext.ui.setStatus("gondolin", undefined);
   } else {
     const vmName = vmIds.get(attachedVm.id) || "unknown";
+    const vmId = attachedVm.id.substring(0, 8);
     const theme = lastContext.ui.theme;
     const indicator = theme.fg("accent", "▶");
-    const status = theme.fg("dim", ` Sandbox: ${vmName}`);
+    const status = theme.fg("dim", ` Sandbox: ${vmName} [${vmId}]`);
     lastContext.ui.setStatus("gondolin", indicator + status);
   }
 }
@@ -109,6 +110,8 @@ function cleanupVm(vmName: string, vmId: string): void {
     updateStatusBar();
   }
 }
+
+
 
 function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): string {
   // Handle absolute paths that are already in guest format (starting with /root/workspace or /root/.pi)
@@ -282,6 +285,8 @@ export default function (pi: ExtensionAPI) {
       const config = await getConfig();
       if (config.autoAttach && !attachedVm) {
         const defaultVmName = config.workspace.defaultVmName;
+        
+        // Check if VM already exists
         if (vms.has(defaultVmName)) {
           attachedVm = vms.get(defaultVmName)!;
           updateStatusBar();
@@ -328,11 +333,11 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(`Auto-attached to: ${defaultVmName}`, "success");
           }
         } catch (err) {
-          ctx.ui.notify(`Failed to auto-attach: ${err}`, "warning");
+          ctx.ui.notify(`Failed to auto-attach: ${err}`, "error");
         }
       }
     } catch (err) {
-      // Silently ignore config loading errors
+      ctx.ui.notify(`Auto-attach config error: ${err}`, "error");
     }
   });
 
@@ -398,7 +403,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("gondolin", {
-    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach | gc | config [cwd|skills|auto-attach|environment|secrets|mount-host-skills|edit|view|reset])",
+    description: "Manage Gondolin VMs (start [name] [--mount-skills] | stop [name-or-id|session|all] | list | attach [name-or-id] | detach | recreate [name] | gc | config [cwd|skills|auto-attach|environment|secrets|mount-host-skills|edit|view|reset])",
     async handler(args, ctx) {
       if (!currentSessionId) {
         const sessionFile = ctx.sessionManager.getSessionFile();
@@ -713,6 +718,76 @@ export default function (pi: ExtensionAPI) {
             break;
           }
 
+          case "recreate": {
+            const vmName = restArgs.find(arg => !arg.startsWith("-")) || "default";
+            const wasAttached = attachedVm && vmIds.get(attachedVm.id) === vmName;
+
+            try {
+              ctx.ui.notify(`Recreating ${vmName}...`, "info");
+
+              // Step 1: Detach if attached
+              if (wasAttached) {
+                attachedVm = null;
+                updateStatusBar();
+              }
+
+              // Step 2: Stop the VM
+              if (vms.has(vmName)) {
+                const vm = vms.get(vmName)!;
+                try {
+                  await vm.close();
+                  await gcSessions();
+                } catch (err) {
+                  ctx.ui.notify(`Warning stopping VM: ${err}`, "warning");
+                }
+                cleanupVm(vmName, vm.id);
+                vmSkillExceptions.delete(vmName);
+              }
+
+              // Step 3: Recreate the VM
+              const config = await getConfig();
+              const buildResult = await buildVMOptions({
+                vmName,
+                localCwd,
+                sessionId: currentSessionId || "ephemeral",
+                config,
+              });
+
+              const newVm = await VM.create(buildResult.options);
+              await newVm.exec("echo 'VM started'", { cwd: "/root/workspace" });
+
+              // Step 4: Register new VM
+              vms.set(vmName, newVm);
+              vmIds.set(newVm.id, vmName);
+              if (buildResult.skillPaths.length > 0) {
+                vmSkillExceptions.set(vmName, buildResult.skillPaths);
+              }
+              if (buildResult.customMounts.length > 0) {
+                vmCustomMounts.set(vmName, buildResult.customMounts);
+              }
+              globalThis.gondolinVmRegistry.set(vmName, { name: vmName, vm: newVm });
+
+              // Step 5: Reattach if was attached
+              if (wasAttached) {
+                attachedVm = newVm;
+                updateStatusBar();
+              }
+
+              const details =
+                `Recreated: ${vmName}\n` +
+                `ID: ${newVm.id}\n` +
+                `CWD mount: ${config.workspace.mountCwd ? "ON" : "OFF"}\n` +
+                `Skills: ${config.skills.enabled ? "ON" : "OFF"}${config.skills.readOnly ? " (read-only)" : ""}` +
+                (wasAttached ? `\nReattached: Yes` : "")
+              ;
+
+              ctx.ui.notify(details, "success");
+            } catch (err) {
+              ctx.ui.notify(`Error recreating VM: ${err}`, "error");
+            }
+            break;
+          }
+
           case "gc": {
             try {
               const cleaned = await gcSessions();
@@ -787,7 +862,7 @@ export default function (pi: ExtensionAPI) {
           }
 
           default:
-            ctx.ui.notify("Usage: /gondolin {start <name> [--mount-skills] | stop [name-or-id|session|all] | list | attach [name] | detach | gc | config [...]}", "info");
+            ctx.ui.notify("Usage: /gondolin {start <name> [--mount-skills] | stop [name-or-id|session|all] | list | attach [name] | detach | recreate [name] | gc | config [...]}", "info");
         }
       } catch (error) {
         ctx.ui.notify(`Error: ${error}`, "error");
