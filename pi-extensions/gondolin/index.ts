@@ -97,12 +97,28 @@ function cleanupVm(vmName: string, vmId: string): void {
 }
 
 function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptions?: string[]): string {
+  // Handle absolute paths that are already in guest format (starting with /root/workspace or /root/.pi)
+  if (localPath.startsWith("/root/workspace") || localPath.startsWith("/root/.pi")) {
+    // Normalize the path to resolve .. and . components, preventing directory traversal
+    const normalized = path.posix.normalize(localPath);
+    // Verify it's still within the allowed boundaries after normalization
+    if (normalized.startsWith("/root/workspace") || normalized.startsWith("/root/.pi")) {
+      return normalized;
+    }
+    throw new Error(`path escapes workspace: ${localPath}`);
+  }
+
   if (exceptions?.length) {
     try {
       const canonicalPath = fs.realpathSync(localPath);
+      // Check if the path is within any of the exception paths (skill directories)
       for (const exceptionPath of getCanonicalSkillPaths()) {
         if (canonicalPath === exceptionPath || canonicalPath.startsWith(exceptionPath + path.sep)) {
-          return localPath;
+          // Map the local skill path to the mounted guest path
+          const skillsBaseDir = path.join(process.env.HOME || "/root", ".pi/agent/skills");
+          const rel = path.relative(skillsBaseDir, canonicalPath);
+          const posixRel = rel.split(path.sep).join(path.posix.sep);
+          return path.posix.join("/root/.pi/agent/skills", posixRel);
         }
       }
     } catch {
