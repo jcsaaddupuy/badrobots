@@ -13,6 +13,7 @@ import {
   expandSkillPaths,
   getGuestImagePath,
 } from "./config";
+import { createSecretsHooks } from "./secrets-hooks";
 
 const WORKSPACE = "/root/workspace";
 
@@ -33,6 +34,13 @@ export interface BuildVMOptionsResult {
   warnings: string[];
   skillPaths: string[];
   customMounts: { guestPath: string; hostPath: string; writable: boolean }[];
+  secretsMounted: boolean;
+  /** Only set when secretsFile is configured and exists. */
+  secretsInfo?: {
+    filePath: string;
+    /** NAME → placeholder mapping from createSecretsHooks */
+    placeholders: Record<string, string>;
+  };
 }
 
 /**
@@ -148,16 +156,41 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
   }
 
   // Build network hooks
-  const { httpHooks, env: secretsEnv } = createHttpHooks({
-    allowedHosts: config.network.allowedHosts,
-    blockInternalRanges: config.network.blockInternalRanges,
-    secrets,
-  });
+  // If a secretsFile is configured, use createSecretsHooks for live resolution.
+  // Otherwise fall back to the standard createHttpHooks with static values.
+  let httpHooks: any;
+  let secretsPlaceholders: Record<string, string> | undefined;
 
-  // Merge secrets env into environment variables
-  Object.assign(env, secretsEnv);
-
-  // Construct final VM options
+  if (config.secretsFile) {
+    if (!fs.existsSync(config.secretsFile)) {
+      warnings.push(`Secrets file not found: ${config.secretsFile} — secrets will not be mounted`);
+      const result = createHttpHooks({
+        allowedHosts: config.network.allowedHosts,
+        blockInternalRanges: config.network.blockInternalRanges,
+        secrets,
+      });
+      httpHooks = result.httpHooks;
+      Object.assign(env, result.env);
+    } else {
+      const result = createSecretsHooks(config.secretsFile, {
+        extraAllowedHosts: config.network.allowedHosts,
+      });
+      httpHooks = result.httpHooks;
+      // result.env contains only NAME → placeholder entries
+      secretsPlaceholders = { ...result.env };
+      Object.assign(env, result.env);
+      // Add per-secret VFS mounts alongside other mounts
+      Object.assign(mounts, result.vfsMounts);
+    }
+  } else {
+    const result = createHttpHooks({
+      allowedHosts: config.network.allowedHosts,
+      blockInternalRanges: config.network.blockInternalRanges,
+      secrets,
+    });
+    httpHooks = result.httpHooks;
+    Object.assign(env, result.env);
+  }
   const vmCreateOptions: any = {
     sessionLabel,
     httpHooks,
@@ -171,11 +204,18 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
     vmCreateOptions.sandbox = { imagePath: guestImagePath };
   }
 
+  // Track whether secrets VFS was actually mounted (file existed and was valid)
+  const secretsMounted = Boolean(config.secretsFile && fs.existsSync(config.secretsFile));
+
   return {
     options: vmCreateOptions,
     warnings,
     skillPaths,
     customMounts,
+    secretsMounted,
+    secretsInfo: secretsMounted && secretsPlaceholders
+      ? { filePath: config.secretsFile!, placeholders: secretsPlaceholders }
+      : undefined,
   };
 }
 

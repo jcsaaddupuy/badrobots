@@ -34,6 +34,9 @@ export async function handleConfigCommand(
     case "secrets":
       await handleSecretsConfig(subArgs.join(" "), ctx);
       break;
+    case "secrets-file":
+      await handleSecretsFileConfig(subArgs.join(" "), ctx);
+      break;
     case "view":
       await handleViewConfig(ctx);
       break;
@@ -45,7 +48,7 @@ export async function handleConfigCommand(
       break;
     default:
       ctx.ui.notify(
-        `Usage: /gondolin config {cwd | skills | auto-attach | guest-image | environment | secrets | edit | view | reset}`,
+        `Usage: /gondolin config {cwd | skills | auto-attach | guest-image | environment | secrets | secrets-file | edit | view | reset}`,
         "info"
       );
   }
@@ -399,6 +402,9 @@ async function handleViewConfig(ctx: any): Promise<void> {
     Object.entries(config.secrets).forEach(([key, val]: [string, any]) => {
       output += `  ${key}: ${val.type} → hosts: ${val.hosts.join(", ")}\n`;
     });
+    output += `\n`;
+
+    output += `Secrets File: ${config.secretsFile || "(not set)"}\n`;
 
     ctx.ui.notify(output, "info");
   } catch (error) {
@@ -706,6 +712,72 @@ async function handleGuestImageConfig(args: string, ctx: any): Promise<void> {
         `Active: ${config.guestImage.imagePath || process.env.GONDOLIN_GUEST_DIR || "Gondolin default"}`,
         "info"
       );
+    } else {
+      ctx.ui.notify(
+        `Unknown command: ${cmd}\n` +
+        `Usage: set <path> | unset | show`,
+        "error"
+      );
+    }
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config secrets-file [set <path> | unset | show]
+ * Configure the host secrets file for live VFS + HTTP injection.
+ */
+async function handleSecretsFileConfig(args: string, ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+    const [cmd, ...rest] = args.trim().split(/\s+/);
+    const filePath = rest.join(" ");
+
+    if (!cmd || cmd === "show") {
+      ctx.ui.notify(
+        `Secrets File Configuration\n\n` +
+        `Current: ${config.secretsFile || "(not set)"}\n\n` +
+        `When set, secrets are read from the file and:\n` +
+        `  • Mounted at /run/secrets/<NAME> inside the VM\n` +
+        `  • Injected live into HTTP headers on every request\n\n` +
+        `File format (one per line):\n` +
+        `  NAME@HOST[,HOST...][=VALUE]\n` +
+        `  # lines starting with # are comments\n\n` +
+        `Usage:\n` +
+        `  /gondolin config secrets-file set <path>   Set secrets file\n` +
+        `  /gondolin config secrets-file unset        Remove secrets file\n` +
+        `  /gondolin config secrets-file show         Show current config`,
+        "info"
+      );
+      return;
+    }
+
+    if (cmd === "set") {
+      if (!filePath) {
+        ctx.ui.notify("Usage: /gondolin config secrets-file set <path>", "error");
+        return;
+      }
+
+      const resolved = filePath.startsWith("~")
+        ? filePath.replace("~", process.env.HOME || "/root")
+        : filePath;
+
+      if (!fs.existsSync(resolved)) {
+        ctx.ui.notify(
+          `File not found: ${resolved}\n\n` +
+          `The file will still be saved in config, but the VM will warn at start if it's missing.`,
+          "warning"
+        );
+      }
+
+      config.secretsFile = resolved;
+      await setConfig(config);
+      ctx.ui.notify(`✓ Secrets file set to: ${resolved}`, "success");
+    } else if (cmd === "unset") {
+      config.secretsFile = undefined;
+      await setConfig(config);
+      ctx.ui.notify(`✓ Secrets file removed`, "success");
     } else {
       ctx.ui.notify(
         `Unknown command: ${cmd}\n` +

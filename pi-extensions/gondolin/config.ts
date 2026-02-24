@@ -48,6 +48,13 @@ export interface GondolinConfig {
       hosts: string[];
     };
   };
+  /**
+   * Path to a secrets file on the host.
+   * Format: NAME@HOST[,HOST...][=VALUE] (one per line, # comments, blank lines ignored)
+   * When set, secrets are mounted at /run/secrets/<NAME> in the VM and injected
+   * live into HTTP headers. Values are re-read from the host on every access.
+   */
+  secretsFile?: string;
 }
 
 /**
@@ -79,6 +86,7 @@ export const DEFAULT_CONFIG: GondolinConfig = {
   },
   environment: {},
   secrets: {},
+  secretsFile: undefined,
 };
 
 /**

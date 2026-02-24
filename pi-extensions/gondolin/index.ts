@@ -25,6 +25,7 @@ import {
 import { getConfig } from "./config";
 import { buildVMOptions, formatVMCreationWarnings, type VMCreationContext } from "./vm-builder";
 import { RemoteVM } from "./remote-vm";
+import { parseSecretsFile } from "./secrets-hooks";
 
 const PI_PREFIX = "pi:";
 const SESSION_MARKER = "◆";
@@ -74,6 +75,8 @@ if (!globalThis.gondolinVmRegistry) {
 const vms = new Map<string, VM | RemoteVM>();
 const vmIds = new Map<string, string>();
 const vmCustomMounts = new Map<string, { guestPath: string; hostPath: string; writable: boolean }[]>();
+const vmSecretsMounted = new Set<string>(); // VMs that have /run/secrets mounted
+const vmSecretsInfo = new Map<string, { filePath: string; placeholders: Record<string, string> }>();
 const remoteVms = new Set<string>(); // Track which VMs are remote
 let currentSessionId: string | undefined;
 let attachedVm: VM | RemoteVM | null = null;
@@ -123,6 +126,8 @@ function cleanupVm(vmName: string, vmId: string): void {
   vms.delete(vmName);
   vmIds.delete(vmId);
   vmCustomMounts.delete(vmName);
+  vmSecretsMounted.delete(vmName);
+  vmSecretsInfo.delete(vmName);
   remoteVms.delete(vmName);
   globalThis.gondolinVmRegistry.delete(vmName);
   if (attachedVm && vmIds.get(attachedVm.id) === vmName) {
@@ -142,13 +147,22 @@ function toRemoteVmPath(localPath: string): string {
   return path.isAbsolute(localPath) ? localPath : path.resolve(localPath);
 }
 
-function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): string {
+function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean): string {
   // Handle absolute paths that are already in guest format (starting with /root/workspace or /root/.pi)
   if (localPath.startsWith("/root/workspace") || localPath.startsWith("/root/.pi")) {
     // Normalize the path to resolve .. and . components, preventing directory traversal
     const normalized = path.posix.normalize(localPath);
     // Verify it's still within the allowed boundaries after normalization
     if (normalized.startsWith("/root/workspace") || normalized.startsWith("/root/.pi")) {
+      return normalized;
+    }
+    throw new Error(`path escapes workspace: ${localPath}`);
+  }
+
+  // Allow /run/secrets when a secrets file is mounted in this VM
+  if (hasSecrets && (localPath === "/run/secrets" || localPath.startsWith("/run/secrets/"))) {
+    const normalized = path.posix.normalize(localPath);
+    if (normalized === "/run/secrets" || normalized.startsWith("/run/secrets/")) {
       return normalized;
     }
     throw new Error(`path escapes workspace: ${localPath}`);
@@ -214,21 +228,59 @@ function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptio
   return path.posix.join(WORKSPACE, posixRel);
 }
 
-function createVmReadOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): ReadOperations {
+/**
+ * Build the per-exec env for secret injection.
+ *
+ * Rules:
+ *  - Re-read the secrets file so newly added/removed entries take effect immediately.
+ *  - For each secret currently in the file: inject NAME=placeholder (unless the
+ *    caller already set that NAME in their own env — caller wins).
+ *  - Secrets removed from the file are simply not added (effectively removed from env).
+ *  - Merged result: callerEnv overrides secrets; secrets fill in the rest.
+ */
+function buildSecretsExecEnv(
+  info: { filePath: string; placeholders: Record<string, string> },
+  callerEnv?: Record<string, string>
+): Record<string, string> {
+  let currentNames: string[];
+  try {
+    currentNames = parseSecretsFile(info.filePath).map((e) => e.name);
+  } catch {
+    // If the file is temporarily unreadable, don't inject anything
+    currentNames = [];
+  }
+
+  const merged: Record<string, string> = {};
+
+  // 1. Start with secrets placeholders for names currently in the file
+  for (const name of currentNames) {
+    const placeholder = info.placeholders[name];
+    if (placeholder) merged[name] = placeholder;
+  }
+
+  // 2. Caller env overrides (also covers "don't inject if already set")
+  if (callerEnv) {
+    Object.assign(merged, callerEnv);
+  }
+
+  return merged;
+}
+
+function createVmReadOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean): ReadOperations {
   return {
     readFile: async (p) => {
-      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts);
+      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts, hasSecrets);
       const r = await vm.exec(["/bin/cat", guestPath]);
       if (!r.ok) throw new Error(`cat failed (${r.exitCode}): ${r.stderr}`);
       return r.stdoutBuffer;
     },
     access: async (p) => {
-      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts);
+      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts, hasSecrets);
       const r = await vm.exec(["/bin/sh", "-lc", `test -r ${shQuote(guestPath)}`]);
       if (!r.ok) throw new Error(`not readable: ${p}`);
     },
     detectImageMimeType: async (p) => {
-      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts);
+      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts, hasSecrets);
       try {
         const r = await vm.exec(["/bin/sh", "-lc", `file --mime-type -b ${shQuote(guestPath)}`]);
         if (!r.ok) return null;
@@ -241,10 +293,10 @@ function createVmReadOps(vm: VM, localCwd: string, exceptions?: string[], custom
   };
 }
 
-function createVmWriteOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): WriteOperations {
+function createVmWriteOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean): WriteOperations {
   return {
     writeFile: async (p, content) => {
-      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts);
+      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts, hasSecrets);
       const dir = path.posix.dirname(guestPath);
       const b64 = Buffer.from(content, "utf8").toString("base64");
       const script = [`set -eu`, `mkdir -p ${shQuote(dir)}`, `echo ${shQuote(b64)} | base64 -d > ${shQuote(guestPath)}`].join("\n");
@@ -252,25 +304,25 @@ function createVmWriteOps(vm: VM, localCwd: string, exceptions?: string[], custo
       if (!r.ok) throw new Error(`write failed (${r.exitCode}): ${r.stderr}`);
     },
     mkdir: async (dir) => {
-      const guestDir = toGuestPathWithExceptions(localCwd, dir, exceptions, customMounts);
+      const guestDir = toGuestPathWithExceptions(localCwd, dir, exceptions, customMounts, hasSecrets);
       const r = await vm.exec(["/bin/mkdir", "-p", guestDir]);
       if (!r.ok) throw new Error(`mkdir failed (${r.exitCode}): ${r.stderr}`);
     },
   };
 }
 
-function createVmEditOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): EditOperations {
-  const r = createVmReadOps(vm, localCwd, exceptions, customMounts);
-  const w = createVmWriteOps(vm, localCwd, exceptions, customMounts);
+function createVmEditOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean): EditOperations {
+  const r = createVmReadOps(vm, localCwd, exceptions, customMounts, hasSecrets);
+  const w = createVmWriteOps(vm, localCwd, exceptions, customMounts, hasSecrets);
   return { readFile: r.readFile, access: r.access, writeFile: w.writeFile };
 }
 
-function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[]): BashOperations {
+function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean, secretsInfo?: { filePath: string; placeholders: Record<string, string> }): BashOperations {
   return {
-    exec: async (command, cwd, { onData, signal, timeout, env: _env }) => {
+    exec: async (command, cwd, { onData, signal, timeout, env: callerEnv }) => {
       let guestCwd: string;
       try {
-        guestCwd = toGuestPathWithExceptions(localCwd, cwd, exceptions, customMounts);
+        guestCwd = toGuestPathWithExceptions(localCwd, cwd, exceptions, customMounts, hasSecrets);
       } catch (e) {
         throw e;
       }
@@ -285,11 +337,16 @@ function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], custom
         : undefined;
 
       try {
+        const execEnv = secretsInfo
+          ? buildSecretsExecEnv(secretsInfo, callerEnv ?? undefined)
+          : (callerEnv ?? undefined);
+
         const proc = vm.exec(["/bin/bash", "-lc", command], {
           cwd: guestCwd,
           signal: ac.signal,
           stdout: "pipe",
           stderr: "pipe",
+          env: execEnv,
         });
 
         for await (const chunk of proc.output()) {
@@ -457,6 +514,10 @@ export default function (pi: ExtensionAPI) {
           if (buildResult.customMounts.length > 0) {
             vmCustomMounts.set(defaultVmName, buildResult.customMounts);
           }
+          if (buildResult.secretsMounted) {
+            vmSecretsMounted.add(defaultVmName);
+            if (buildResult.secretsInfo) vmSecretsInfo.set(defaultVmName, buildResult.secretsInfo);
+          }
           globalThis.gondolinVmRegistry.set(defaultVmName, { name: defaultVmName, vm });
 
           attachedVm = vm;
@@ -525,18 +586,20 @@ export default function (pi: ExtensionAPI) {
       // Use pi-managed VM operations with workspace checks
       const exceptions = vmSkillExceptions.get(vmName);
       const customMounts = vmCustomMounts.get(vmName);
+      const hasSecrets = vmSecretsMounted.has(vmName);
+      const secretsInfo = vmSecretsInfo.get(vmName);
       switch (type) {
         case "read":
-          return createReadTool(localCwd, { operations: createVmReadOps(attachedVm as VM, localCwd, exceptions, customMounts) })
+          return createReadTool(localCwd, { operations: createVmReadOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets) })
             .execute(id, params, signal, onUpdate, ctx);
         case "write":
-          return createWriteTool(localCwd, { operations: createVmWriteOps(attachedVm as VM, localCwd, exceptions, customMounts) })
+          return createWriteTool(localCwd, { operations: createVmWriteOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets) })
             .execute(id, params, signal, onUpdate, ctx);
         case "edit":
-          return createEditTool(localCwd, { operations: createVmEditOps(attachedVm as VM, localCwd, exceptions, customMounts) })
+          return createEditTool(localCwd, { operations: createVmEditOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets) })
             .execute(id, params, signal, onUpdate, ctx);
         case "bash":
-          return createBashTool(localCwd, { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts) })
+          return createBashTool(localCwd, { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, secretsInfo) })
             .execute(id, params, signal, onUpdate, ctx);
       }
     };
@@ -558,7 +621,9 @@ export default function (pi: ExtensionAPI) {
     
     const exceptions = vmSkillExceptions.get(vmName);
     const customMounts = vmCustomMounts.get(vmName);
-    return { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts) };
+    const hasSecrets = vmSecretsMounted.has(vmName);
+    const secretsInfo = vmSecretsInfo.get(vmName);
+    return { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, secretsInfo) };
   });
 
   pi.on("before_agent_start", (event, ctx) => {
@@ -728,6 +793,10 @@ export default function (pi: ExtensionAPI) {
               }
               if (buildResult.customMounts.length > 0) {
                 vmCustomMounts.set(name, buildResult.customMounts);
+              }
+              if (buildResult.secretsMounted) {
+                vmSecretsMounted.add(name);
+                if (buildResult.secretsInfo) vmSecretsInfo.set(name, buildResult.secretsInfo);
               }
               globalThis.gondolinVmRegistry.set(name, { name, vm });
 
@@ -970,6 +1039,10 @@ export default function (pi: ExtensionAPI) {
               }
               if (buildResult.customMounts.length > 0) {
                 vmCustomMounts.set(vmName, buildResult.customMounts);
+              }
+              if (buildResult.secretsMounted) {
+                vmSecretsMounted.add(vmName);
+                if (buildResult.secretsInfo) vmSecretsInfo.set(vmName, buildResult.secretsInfo);
               }
               globalThis.gondolinVmRegistry.set(vmName, { name: vmName, vm: newVm });
 

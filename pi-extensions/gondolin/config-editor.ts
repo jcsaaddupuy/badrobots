@@ -66,6 +66,12 @@ export async function showGondolinSettings(ctx: any): Promise<void> {
         values: ["manage"],
       },
       {
+        id: "secrets-file",
+        label: `Secrets File`,
+        currentValue: config.secretsFile || "(not set)",
+        values: [config.secretsFile || "(not set)"],
+      },
+      {
         id: "custom-mounts",
         label: `Custom Mounts (${Object.keys(config.customMounts).length})`,
         currentValue: "manage",
@@ -98,6 +104,26 @@ export async function showGondolinSettings(ctx: any): Promise<void> {
         if (id === "secrets") {
           done(undefined);
           await manageSecrets(ctx, config);
+          return;
+        }
+
+        if (id === "secrets-file") {
+          done(undefined);
+          const current = config.secretsFile || "";
+          const input = await ctx.ui.input(
+            `Secrets file path (leave empty to unset, current: ${current || "not set"}): `
+          );
+          if (input === null || input === undefined) {
+            await showGondolinSettings(ctx);
+            return;
+          }
+          if (input.trim() === "") {
+            config.secretsFile = undefined;
+          } else {
+            config.secretsFile = input.trim().replace(/^~/, process.env.HOME || "/root");
+          }
+          await setConfig(config);
+          await showGondolinSettings(ctx);
           return;
         }
 
