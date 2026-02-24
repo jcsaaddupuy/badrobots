@@ -1,331 +1,161 @@
-# Gondolin Extension
+# Gondolin Extension for Pi
 
-Run Pi's tools (read, write, edit, bash) inside isolated Linux micro-VMs. Perfect for sandboxing untrusted code, testing, and secure execution.
-
-## Quick Start
-
-### Auto-Attach (Recommended)
-
-Enable auto-attach to automatically create and connect to a sandbox on session start:
-
-```
-/gondolin config auto-attach on
-```
-
-That's it! Your tools now run in a sandbox.
-
-### Manual Control
-
-```
-/gondolin start default          # Create a VM named "default"
-/gondolin list                   # Show all VMs
-/gondolin attach default         # Connect to a VM
-/gondolin detach                 # Disconnect from current VM
-/gondolin stop default           # Stop a VM
-```
+Seamless sandbox VM management for Pi, supporting both pi-managed Alpine Linux VMs and remote host-managed VMs.
 
 ## Features
 
-### Isolation
-- Each VM is a lightweight Linux micro-VM (boots in ~1s)
-- Runs Alpine Linux by default
-- Fully isolated filesystem, network, and processes
-- No access to host system unless explicitly mounted
+- **Local VMs**: Create and manage pi-managed Alpine Linux sandboxes
+- **Remote VMs**: Execute commands on host-managed Gondolin VMs via IPC
+- **Dual Path Handling**: Workspace-constrained paths for local VMs, full filesystem for remote
+- **Custom Guest Images**: Override default Alpine with custom images
+- **Tool Integration**: Seamless `/read`, `/write`, `/edit`, `/bash` support in both VM types
+- **Fast Command Execution**: `/gondolin exec <vm-id-or-name> <command>`
 
-### Tool Routing
-When attached to a VM, all Pi tools route through the sandbox:
-- `/read` → reads files inside the VM
-- `/write` → writes files inside the VM  
-- `/edit` → edits files inside the VM
-- `/bash` → executes commands inside the VM
+## Quick Start
 
-### Workspace Mounting
-By default, your current working directory is mounted inside the VM at `/root/workspace`:
+```bash
+# List all VMs (local and remote)
+/gondolin list
 
-```
-/gondolin config cwd on          # Enable (default)
-/gondolin config cwd off         # Disable
-```
+# Create and attach to a local VM
+/gondolin start myvm
 
-Make it writable:
-```
-/gondolin config cwd on          # Enable mounting
-# Then edit config to set cwdWritable: true
-```
+# Execute command on any VM by ID or name
+/gondolin exec myvm ls -la
+/gondolin exec 02079628 pwd
 
-### Skills Support
-Mount Pi skills inside the VM so they're available for use:
+# Write to remote VM (no path restrictions)
+/write /tmp/test.txt
+content here
 
-```
-/gondolin config skills enable           # Enable skills
-/gondolin config skills default on       # Mount default skills (enabled by default)
-/gondolin config skills read-only on     # Make skills read-only (recommended)
-/gondolin config skills add /path/to/skill  # Add custom skill path
-/gondolin config skills remove 0         # Remove skill by index
-```
-
-### Network Control
-Control what hosts the VM can access:
-
-```
-/gondolin config edit            # Edit full config
-```
-
-In the config, set `network.allowedHosts` to restrict access:
-```json
-{
-  "network": {
-    "allowedHosts": ["api.github.com", "registry.npmjs.org"],
-    "blockInternalRanges": true
-  }
-}
-```
-
-**Note:** By default, private IP ranges (10.x.x.x, 192.168.x.x, 172.16.x.x) are blocked for security. Set `blockInternalRanges: false` to access internal services.
-
-### Environment Variables
-Inject environment variables into the VM:
-
-```
-/gondolin config environment add MY_VAR propagate    # Copy from host
-/gondolin config environment add MY_VAR static value # Set static value
-/gondolin config environment add MY_VAR reference ${HOME}/file  # Reference other vars
-/gondolin config environment remove MY_VAR
-/gondolin config environment list
-```
-
-### Secrets
-Inject secrets securely (never logged or displayed):
-
-```
-/gondolin config secrets add MY_SECRET propagate api.example.com
-/gondolin config secrets add MY_SECRET static mysecretvalue api.example.com
-/gondolin config secrets remove MY_SECRET
-/gondolin config secrets list
-```
-
-Secrets are only injected for specified hosts:
-```json
-{
-  "secrets": {
-    "GITHUB_TOKEN": {
-      "type": "propagate",
-      "hosts": ["api.github.com", "github.com"]
-    }
-  }
-}
-```
-
-### Custom Mounts
-Mount additional host directories inside the VM:
-
-```
-/gondolin config edit            # Edit full config
-```
-
-Add custom mounts:
-```json
-{
-  "customMounts": {
-    "/data": {
-      "hostPath": "/home/user/data",
-      "writable": false
-    },
-    "/tmp": {
-      "hostPath": "/tmp",
-      "writable": true
-    }
-  }
-}
+# Read from remote VM (any path)
+/read /etc/hostname
 ```
 
 ## Configuration
 
-### Config File Location
-`~/.pi/agent/settings.json` under the `gondolin` key
+### Guest Images
 
-### Full Config Schema
+Override the default Alpine Linux with a custom guest image.
 
-```json
-{
-  "gondolin": {
-    "workspace": {
-      "mountCwd": true,           // Mount current directory
-      "cwdWritable": false,       // Make it writable
-      "defaultVmName": "default"  // Default VM name
-    },
-    "skills": {
-      "enabled": false,           // Enable skills mounting
-      "mountDefault": true,       // Mount default skills
-      "customPaths": [],          // Additional skill paths
-      "readOnly": true            // Make skills read-only
-    },
-    "autoAttach": false,          // Auto-create VM on session start
-    "customMounts": {},           // Custom directory mounts
-    "network": {
-      "allowedHosts": ["*"],      // Allowed hosts (wildcards supported)
-      "blockInternalRanges": true // Block private IPs
-    },
-    "environment": {},            // Environment variables
-    "secrets": {}                 // Secrets (never logged)
-  }
-}
+```bash
+# Show current configuration
+/gondolin config guest-image show
+
+# Set custom image (config override, highest priority)
+/gondolin config guest-image set /path/to/image
+
+# Reset to environment/default
+/gondolin config guest-image unset
 ```
 
-### Quick Config Commands
+**Priority**:
+1. Config override (`guestImage.imagePath`)
+2. Environment variable (`GONDOLIN_GUEST_DIR`)
+3. Gondolin default
 
-```
-/gondolin config view                    # Show current config
-/gondolin config reset                   # Reset to defaults
-/gondolin config edit                    # Edit in text editor
-/gondolin config cwd [on|off]            # Toggle workspace mounting
-/gondolin config skills [enable|disable] # Toggle skills
-/gondolin config auto-attach [on|off]    # Toggle auto-attach
-```
+### Other Configuration
 
-## Commands Reference
+```bash
+# Workspace mounting
+/gondolin config cwd on|off
 
-| Command | Description |
-|---------|-------------|
-| `start [name]` | Create a new VM |
-| `start [name] --mount-skills` | Create VM with skills pre-mounted |
-| `stop [name\|id\|session\|all]` | Stop VM(s) |
-| `list` | Show all VMs |
-| `attach [name\|id]` | Connect to a VM |
-| `detach` | Disconnect from current VM |
-| `recreate [name]` | Recreate a VM |
-| `gc` | Garbage collect unused VMs |
-| `config view` | Show current config |
-| `config edit` | Edit config in editor |
-| `config reset` | Reset to defaults |
+# Skills mounting
+/gondolin config skills {enable|default|read-only|add <path>|remove <index>}
 
-## Examples
+# Auto-attach on session start
+/gondolin config auto-attach on|off
 
-### Example 1: Safe Code Execution
+# Environment variables and secrets
+/gondolin config environment {add|remove|list}
+/gondolin config secrets {add|remove|list}
 
-```
-/gondolin config auto-attach on
-# Now all your tools run in a sandbox
-/bash
-npm install some-untrusted-package
-# Package is installed in sandbox, not on your host
+# Edit/view configuration
+/gondolin config edit
+/gondolin config view
 ```
 
-### Example 2: Isolated Testing
+## VM Commands
 
-```
-/gondolin start test-env
-/gondolin attach test-env
-/bash
-python -m pytest tests/
-# Tests run in isolated environment
-/gondolin detach
-/gondolin stop test-env
-```
+```bash
+# Lifecycle
+/gondolin start <name> [--mount-skills]
+/gondolin stop [name-or-id|session|all]
+/gondolin recreate <name>
 
-### Example 3: Secure API Access
-
-```
-# In ~/.pi/agent/settings.json:
-{
-  "gondolin": {
-    "secrets": {
-      "GITHUB_TOKEN": {
-        "type": "propagate",
-        "hosts": ["api.github.com"]
-      }
-    },
-    "network": {
-      "allowedHosts": ["api.github.com"]
-    }
-  }
-}
-
-# In Pi:
-/gondolin config auto-attach on
-/bash
-curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
-# Token is safely injected, never logged
-```
-
-### Example 4: Multi-Environment Testing
-
-```
-/gondolin start node-18
-/gondolin start node-20
-/gondolin attach node-18
-/bash
-node --version  # v18.x.x
+# Attachment
+/gondolin attach [name-or-id]   # By name or ID prefix
 /gondolin detach
 
-/gondolin attach node-20
-/bash
-node --version  # v20.x.x
+# Execution
+/gondolin exec <vm-id-or-name> <command>
+
+# Management
+/gondolin list
+/gondolin gc
 ```
+
+## Architecture
+
+### Local (Pi-Managed) VMs
+- Created via `VM.create()` from Gondolin SDK
+- Workspace-constrained to `/root/workspace`
+- Path validation prevents escape attacks
+- Supports custom mounts and skill mounting
+
+### Remote (Host-Managed) VMs
+- Connected via IPC socket (`connectToSession()`)
+- Full filesystem access (user controls sandbox)
+- Dynamic `RemoteVM` creation on-demand
+- Alpine Linux compatible (bash→sh, flags, PATH)
+
+## Implementation Details
+
+### Message Protocol
+Commands use Gondolin's IPC protocol:
+- Frame: `[4-byte big-endian length] + [JSON payload]`
+- Fields: `type`, `id`, `cmd`, `argv`, `env`, `stdin`, `pty`
+
+### Stream Management
+- Proper async generator implementation
+- `setImmediate()` prevents race conditions in stream closing
+- Clean spinner handling with single-block output
+
+### Alpine Compatibility
+- Replace `/bin/bash` with `/bin/sh`
+- Convert `-lc` to `-c` (login shell not available)
+- Explicit PATH environment variable setup
 
 ## Troubleshooting
 
-### "QEMU not found"
-Install QEMU:
-```bash
-# macOS
-brew install qemu
+**VM not found with ID prefix**:
+- IDs are looked up from daemon session registry
+- Use `/gondolin list` to see all available VMs
+- Prefix must match the full ID start
 
-# Linux (Debian/Ubuntu)
-sudo apt install qemu-system-x86-64 qemu-system-aarch64
-```
+**Path escape errors on remote VMs**:
+- Remote VMs use no path validation (feature, not bug)
+- Full filesystem access is intentional
+- For local VMs, paths must stay within `/root/workspace`
 
-### "403 Forbidden" for internal services
-Your internal service resolves to a private IP (10.x.x.x, 192.168.x.x, etc). Fix:
+**Commands failing with exit 127**:
+- Alpine sh requires explicit PATH setup
+- PATH is automatically added during VM creation
+- Ensure custom shell commands are available
 
-```json
-{
-  "gondolin": {
-    "network": {
-      "blockInternalRanges": false
-    }
-  }
-}
-```
+## Files
 
-### VM not starting
-Check logs:
-```
-/gondolin list
-# Look for error messages
-```
+- `index.ts`: Main extension, command handlers
+- `remote-vm.ts`: RemoteVM wrapper for IPC connections
+- `config.ts`: Configuration schema and getters
+- `config-commands.ts`: Configuration command handlers
+- `vm-builder.ts`: VM creation options builder
+- `config-editor.ts`: TUI configuration editor
 
-### Tools not routing through VM
-Make sure you're attached:
-```
-/gondolin list
-# Look for ◆ marker next to VM name (indicates current session)
-```
+## Environment Variables
 
-## How It Works
+- `GONDOLIN_GUEST_DIR`: Default custom guest image path (overridable in config)
 
-1. **VM Creation**: When you start a VM, Gondolin boots a lightweight Linux micro-VM using QEMU
-2. **Mounting**: Your workspace and skills are mounted as read-only (or writable) filesystems
-3. **Tool Routing**: When attached, Pi's tools intercept calls and route them through the VM
-4. **Cleanup**: When you stop a VM, all changes are discarded (ephemeral by default)
+## License
 
-## Performance
-
-- **VM Boot**: ~1 second
-- **First Run**: ~5 seconds (downloads guest image, ~200MB)
-- **Subsequent Runs**: ~1 second (cached)
-- **Tool Overhead**: Minimal (network-based communication)
-
-## Security Notes
-
-- VMs are **ephemeral** by default (changes lost on stop)
-- **Secrets are never logged** or displayed in output
-- **Network is restricted** by default (allowlist model)
-- **Filesystem is isolated** (only mounted paths are accessible)
-- **Private IPs are blocked** by default (prevents SSRF attacks)
-
-## Related
-
-- **Gondolin Skill**: `/opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/docs/skills/gondolin/SKILL.md`
-- **Gondolin GitHub**: https://github.com/earendil-works/gondolin
-- **Docker Skill**: For container-based isolation instead of VMs
+Same as Pi project

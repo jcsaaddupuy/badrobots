@@ -11,6 +11,7 @@ import {
   resolveEnvironmentVars,
   prepareSecretsForGondolin,
   expandSkillPaths,
+  getGuestImagePath,
 } from "./config";
 
 const WORKSPACE = "/root/workspace";
@@ -164,9 +165,10 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
     vfs: { mounts },
   };
 
-  // Add sandbox image if configured
-  if (process.env.GONDOLIN_GUEST_DIR) {
-    vmCreateOptions.sandbox = { imagePath: process.env.GONDOLIN_GUEST_DIR };
+  // Add sandbox image if configured (config override or env var)
+  const guestImagePath = await getGuestImagePath();
+  if (guestImagePath) {
+    vmCreateOptions.sandbox = { imagePath: guestImagePath };
   }
 
   return {

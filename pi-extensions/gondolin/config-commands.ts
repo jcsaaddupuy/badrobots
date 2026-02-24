@@ -25,6 +25,9 @@ export async function handleConfigCommand(
     case "auto-attach":
       await handleAutoAttachConfig(ctx);
       break;
+    case "guest-image":
+      await handleGuestImageConfig(subArgs.join(" "), ctx);
+      break;
     case "environment":
       await handleEnvironmentConfig(subArgs.join(" "), ctx);
       break;
@@ -42,7 +45,7 @@ export async function handleConfigCommand(
       break;
     default:
       ctx.ui.notify(
-        `Usage: /gondolin config {cwd | skills | auto-attach | environment | secrets | edit | view | reset}`,
+        `Usage: /gondolin config {cwd | skills | auto-attach | guest-image | environment | secrets | edit | view | reset}`,
         "info"
       );
   }
@@ -643,5 +646,74 @@ export async function mountHostPiSkills(ctx: any): Promise<void> {
     );
   } catch (error) {
     ctx.ui.notify(`Error mounting Pi skills: ${error}`, "error");
+  }
+}
+
+/**
+ * Handle: /gondolin config guest-image [set <path> | unset | show]
+ * Configure custom guest image
+ */
+async function handleGuestImageConfig(args: string, ctx: any): Promise<void> {
+  try {
+    const config = await getConfig();
+    const [cmd, ...pathParts] = args.trim().split(/\s+/);
+    const imagePath = pathParts.join(" ");
+
+    if (!cmd) {
+      // Show current config
+      const current = config.guestImage.imagePath || process.env.GONDOLIN_GUEST_DIR;
+      ctx.ui.notify(
+        `Guest Image Configuration\n\n` +
+        `Current: ${current ? current : "(using Gondolin default)"}\n` +
+        `Environment (GONDOLIN_GUEST_DIR): ${process.env.GONDOLIN_GUEST_DIR || "(not set)"}\n\n` +
+        `Usage:\n` +
+        `  /gondolin config guest-image set <path>   Set custom image\n` +
+        `  /gondolin config guest-image unset         Use environment/default\n` +
+        `  /gondolin config guest-image show          Show current config`,
+        "info"
+      );
+      return;
+    }
+
+    if (cmd === "set") {
+      if (!imagePath) {
+        ctx.ui.notify("Usage: /gondolin config guest-image set <path>", "error");
+        return;
+      }
+      
+      // Verify path exists
+      if (!fs.existsSync(imagePath)) {
+        ctx.ui.notify(`Path does not exist: ${imagePath}`, "error");
+        return;
+      }
+
+      config.guestImage.imagePath = imagePath;
+      await setConfig(config);
+      ctx.ui.notify(`✓ Guest image set to: ${imagePath}`, "success");
+    } else if (cmd === "unset") {
+      config.guestImage.imagePath = undefined;
+      await setConfig(config);
+      ctx.ui.notify(
+        `✓ Guest image reset to default\n` +
+        `Will use: ${process.env.GONDOLIN_GUEST_DIR || "Gondolin default"}`,
+        "success"
+      );
+    } else if (cmd === "show") {
+      ctx.ui.notify(
+        `Guest Image Configuration:\n\n` +
+        `Config override: ${config.guestImage.imagePath || "(not set)"}\n` +
+        `Environment (GONDOLIN_GUEST_DIR): ${process.env.GONDOLIN_GUEST_DIR || "(not set)"}\n` +
+        `Active: ${config.guestImage.imagePath || process.env.GONDOLIN_GUEST_DIR || "Gondolin default"}`,
+        "info"
+      );
+    } else {
+      ctx.ui.notify(
+        `Unknown command: ${cmd}\n` +
+        `Usage: set <path> | unset | show`,
+        "error"
+      );
+    }
+  } catch (error) {
+    ctx.ui.notify(`Error: ${error}`, "error");
   }
 }

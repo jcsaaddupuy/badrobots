@@ -23,6 +23,14 @@ export interface GondolinConfig {
       writable: boolean;
     };
   };
+  guestImage: {
+    imagePath?: string; // Custom guest image, overrides env var
+  };
+  sandbox: {
+    user?: string; // Sandbox user (default: "root")
+    uid?: number; // User ID in guest
+    homeDir?: string; // Guest home directory path
+  };
   network: {
     allowedHosts: string[];
     blockInternalRanges: boolean;
@@ -57,8 +65,14 @@ export const DEFAULT_CONFIG: GondolinConfig = {
     customPaths: [],
     readOnly: true,
   },
-  autoAttach: false,
+  autoAttach: false, // Disabled by default to prevent silent VM attachment
   customMounts: {},
+  guestImage: {
+    imagePath: undefined, // Use GONDOLIN_GUEST_DIR from env if not set
+  },
+  sandbox: {
+    user: "root", // Default: run as root
+  },
   network: {
     allowedHosts: ["*"],
     blockInternalRanges: true,
@@ -548,4 +562,27 @@ export function expandSkillPaths(paths: string[]): {
   }
 
   return { expanded, warnings };
+}
+
+/**
+ * Get the guest image path with proper fallback logic:
+ * 1. Config override (guestImage.imagePath)
+ * 2. Environment variable (GONDOLIN_GUEST_DIR)
+ * 3. Undefined (use Gondolin's default)
+ */
+export async function getGuestImagePath(): Promise<string | undefined> {
+  const config = await getConfig();
+  
+  // Config override takes precedence
+  if (config.guestImage.imagePath) {
+    return config.guestImage.imagePath;
+  }
+  
+  // Fall back to environment variable
+  if (process.env.GONDOLIN_GUEST_DIR) {
+    return process.env.GONDOLIN_GUEST_DIR;
+  }
+  
+  // No override, use Gondolin's default
+  return undefined;
 }
