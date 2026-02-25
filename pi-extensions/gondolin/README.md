@@ -157,14 +157,17 @@ Commands use Gondolin's IPC protocol:
 ### Host Environment Variables
 - `GONDOLIN_GUEST_DIR`: Default custom guest image path (overridable in config)
 
-### Guest Environment Variables (Set Automatically)
-The following environment variables are automatically set in all VMs unless explicitly overridden in the configuration:
-
-- `HOME`: Guest home directory (default: `/root`, configurable via `sandbox.homeDir`)
+### Guest Environment Variables
+Automatically set in all VMs unless overridden in configuration:
+- `HOME`: Guest home directory (default: `/root`)
 - `TMPDIR`: Temporary directory (default: `/tmp`)
 - `PI_TMUX_SOCKET_DIR`: Tmux socket directory (default: `/tmp/pi-tmux-sockets`)
 
-These defaults ensure compatibility with tools like tmux and other utilities that depend on standard environment variables. Users can override any of these in the configuration's `environment` section.
+### Environment Isolation
+- **Current session VMs**: Configured environment variables + secrets are propagated
+- **Other session VMs**: No environment propagation (isolated)
+- **Remote VMs**: No environment propagation (isolated)
+- **Host environment**: NOT propagated to VMs (security isolation)
 
 ## License
 
