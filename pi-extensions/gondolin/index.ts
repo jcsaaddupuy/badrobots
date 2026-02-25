@@ -77,6 +77,7 @@ const vmIds = new Map<string, string>();
 const vmCustomMounts = new Map<string, { guestPath: string; hostPath: string; writable: boolean }[]>();
 const vmSecretsMounted = new Set<string>(); // VMs that have /run/secrets mounted
 const vmSecretsInfo = new Map<string, { filePath: string; placeholders: Record<string, string> }>();
+const vmConfiguredEnv = new Map<string, Record<string, string>>(); // Store configured environment variables per VM
 const remoteVms = new Set<string>(); // Track which VMs are remote
 let currentSessionId: string | undefined;
 let attachedVm: VM | RemoteVM | null = null;
@@ -128,6 +129,7 @@ function cleanupVm(vmName: string, vmId: string): void {
   vmCustomMounts.delete(vmName);
   vmSecretsMounted.delete(vmName);
   vmSecretsInfo.delete(vmName);
+  vmConfiguredEnv.delete(vmName);
   remoteVms.delete(vmName);
   globalThis.gondolinVmRegistry.delete(vmName);
   if (attachedVm && vmIds.get(attachedVm.id) === vmName) {
@@ -317,7 +319,7 @@ function createVmEditOps(vm: VM, localCwd: string, exceptions?: string[], custom
   return { readFile: r.readFile, access: r.access, writeFile: w.writeFile };
 }
 
-function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean, secretsInfo?: { filePath: string; placeholders: Record<string, string> }): BashOperations {
+function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean, secretsInfo?: { filePath: string; placeholders: Record<string, string> }, vmName?: string): BashOperations {
   return {
     exec: async (command, cwd, { onData, signal, timeout, env: callerEnv }) => {
       let guestCwd: string;
@@ -337,9 +339,21 @@ function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], custom
         : undefined;
 
       try {
-        const execEnv = secretsInfo
-          ? buildSecretsExecEnv(secretsInfo, callerEnv ?? undefined)
-          : (callerEnv ?? undefined);
+        // Use configured environment variables (from VM creation), NOT host environment
+        // Secrets placeholders override configured variables if both exist
+        let execEnv: Record<string, string> | undefined;
+        
+        if (vmName) {
+          const configuredEnv = vmConfiguredEnv.get(vmName);
+          if (configuredEnv) {
+            execEnv = { ...configuredEnv };
+          }
+        }
+        
+        if (secretsInfo) {
+          const secretsEnv = buildSecretsExecEnv(secretsInfo, undefined);
+          execEnv = execEnv ? { ...execEnv, ...secretsEnv } : secretsEnv;
+        }
 
         const proc = vm.exec(["/bin/bash", "-lc", command], {
           cwd: guestCwd,
@@ -424,7 +438,7 @@ function createRemoteVmEditOps(vm: RemoteVM): EditOperations {
 
 function createRemoteVmBashOps(vm: RemoteVM): BashOperations {
   return {
-    exec: async (command, cwd, { onData, signal, timeout, env: _env }) => {
+    exec: async (command, cwd, { onData, signal, timeout, env }) => {
       const ac = new AbortController();
       const onAbort = () => ac.abort();
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -435,10 +449,12 @@ function createRemoteVmBashOps(vm: RemoteVM): BashOperations {
         : undefined;
 
       try {
+        // Do NOT propagate host environment variables to the VM
         const proc = vm.exec(["/bin/sh", "-c", command], {
           signal: ac.signal,
           stdout: "pipe",
           stderr: "pipe",
+          // env is intentionally not passed - do not propagate host environment
         });
 
         for await (const chunk of proc.output()) {
@@ -518,6 +534,8 @@ export default function (pi: ExtensionAPI) {
             vmSecretsMounted.add(defaultVmName);
             if (buildResult.secretsInfo) vmSecretsInfo.set(defaultVmName, buildResult.secretsInfo);
           }
+          // Store configured environment variables for this VM
+          vmConfiguredEnv.set(defaultVmName, buildResult.options.env || {});
           globalThis.gondolinVmRegistry.set(defaultVmName, { name: defaultVmName, vm });
 
           attachedVm = vm;
@@ -599,7 +617,7 @@ export default function (pi: ExtensionAPI) {
           return createEditTool(localCwd, { operations: createVmEditOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets) })
             .execute(id, params, signal, onUpdate, ctx);
         case "bash":
-          return createBashTool(localCwd, { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, secretsInfo) })
+          return createBashTool(localCwd, { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, secretsInfo, vmName) })
             .execute(id, params, signal, onUpdate, ctx);
       }
     };
@@ -623,7 +641,7 @@ export default function (pi: ExtensionAPI) {
     const customMounts = vmCustomMounts.get(vmName);
     const hasSecrets = vmSecretsMounted.has(vmName);
     const secretsInfo = vmSecretsInfo.get(vmName);
-    return { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, secretsInfo) };
+    return { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, secretsInfo, vmName) };
   });
 
   pi.on("before_agent_start", (event, ctx) => {
@@ -1044,6 +1062,8 @@ export default function (pi: ExtensionAPI) {
                 vmSecretsMounted.add(vmName);
                 if (buildResult.secretsInfo) vmSecretsInfo.set(vmName, buildResult.secretsInfo);
               }
+              // Store configured environment variables for this VM
+              vmConfiguredEnv.set(vmName, buildResult.options.env || {});
               globalThis.gondolinVmRegistry.set(vmName, { name: vmName, vm: newVm });
 
               // Step 5: Reattach if was attached
