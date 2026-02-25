@@ -144,6 +144,22 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
     envWarnings.forEach(w => warnings.push(w));
   }
 
+  // Set default environment variables for VM
+  // These are essential for tools like tmux to work correctly
+  const guestHomeDir = config.sandbox.homeDir || "/root";
+  const guestTmpDir = "/tmp";
+  
+  // Only set if not already configured by user
+  if (!env.HOME) {
+    env.HOME = guestHomeDir;
+  }
+  if (!env.TMPDIR) {
+    env.TMPDIR = guestTmpDir;
+  }
+  if (!env.PI_TMUX_SOCKET_DIR) {
+    env.PI_TMUX_SOCKET_DIR = `${guestTmpDir}/pi-tmux-sockets`;
+  }
+
   // Prepare secrets
   let secrets: Record<string, { hosts: string[]; value: string }> = {};
 
