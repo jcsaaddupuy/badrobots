@@ -190,8 +190,27 @@ class SecretsDirectoryProvider extends (VirtualProviderClass as any) implements 
     super();
   }
 
-  private _placeholder(name: string): string | undefined {
+  /**
+   * Return the placeholder for a named secret.
+   * If this secret was added to the file after VM creation, lazily generate and
+   * register a new placeholder so it becomes available both in VFS and HTTP hooks.
+   * Callers must have already verified the name exists in the current secrets file.
+   */
+  private _getOrCreatePlaceholder(name: string): string {
+    if (!this.placeholders[name]) {
+      // New secret added to file after VM creation — lazily register a placeholder.
+      this.placeholders[name] = `GONDOLIN_SECRET_${crypto.randomBytes(24).toString("hex")}`;
+    }
     return this.placeholders[name];
+  }
+
+  /** Return the set of names currently defined in the secrets file. */
+  private _currentNames(): Set<string> {
+    try {
+      return new Set(parseSecretsFile(this.secretsFilePath).map((e) => e.name));
+    } catch {
+      return new Set();
+    }
   }
 
   private _fileStats(size: number): fs.Stats {
@@ -231,9 +250,10 @@ class SecretsDirectoryProvider extends (VirtualProviderClass as any) implements 
     const name = normalized.slice(1);
     if (name.includes("/")) throw enoent(path);
 
-    const placeholder = this._placeholder(name);
-    if (!placeholder) throw enoent(path);
+    // Verify the name exists in the current secrets file
+    if (!this._currentNames().has(name)) throw enoent(path);
 
+    const placeholder = this._getOrCreatePlaceholder(name);
     return this._fileStats(Buffer.byteLength(placeholder, "utf-8"));
   }
 
@@ -260,8 +280,10 @@ class SecretsDirectoryProvider extends (VirtualProviderClass as any) implements 
     const name = normalized.slice(1);
     if (name.includes("/")) throw enoent(path);
 
-    const placeholder = this._placeholder(name);
-    if (!placeholder) throw enoent(path);
+    // Verify the name exists in the current secrets file
+    if (!this._currentNames().has(name)) throw enoent(path);
+
+    const placeholder = this._getOrCreatePlaceholder(name);
 
     // Serve the placeholder — the real value is never written into the VM.
     return new SecretFileHandle(path, Buffer.from(placeholder, "utf-8"));
@@ -413,6 +435,258 @@ class SecretFileHandle implements VirtualFileHandle {
 };
 
 // ---------------------------------------------------------------------------
+// Environment VFS provider
+// ---------------------------------------------------------------------------
+
+/**
+ * A read-only directory provider mounted at /run/env.
+ *
+ * Serves host environment variables as files:
+ *   /run/env/VAR_NAME → raw value from process.env[VAR_NAME]
+ *
+ * Every access re-reads process.env, so changes are live.
+ * Values are NOT obfuscated (unlike secrets).
+ *
+ * If a name exists in both secrets and env vars, the secret takes precedence
+ * (the caller should filter out secret names before mounting this provider).
+ */
+class EnvironmentDirectoryProvider extends (VirtualProviderClass as any) implements VirtualProvider {
+  readonly readonly = true;
+  readonly supportsSymlinks = false;
+  readonly supportsWatch = false;
+
+  constructor(private readonly secretNames?: Set<string>) {
+    super();
+  }
+
+  /** Return the set of environment variable names, excluding any that are secrets. */
+  private _currentEnvNames(): Set<string> {
+    const names = new Set<string>();
+    for (const key of Object.keys(process.env)) {
+      // Skip secret names (they take precedence)
+      if (this.secretNames?.has(key)) continue;
+      names.add(key);
+    }
+    return names;
+  }
+
+  private _fileStats(size: number): fs.Stats {
+    const now = Date.now();
+    const stats = Object.create(fs.Stats.prototype);
+    Object.assign(stats, {
+      dev: 0,
+      mode: 0o100444, // regular file, read-only
+      nlink: 1,
+      uid: 0,
+      gid: 0,
+      rdev: 0,
+      blksize: 4096,
+      ino: 0,
+      size,
+      blocks: Math.ceil(size / 512),
+      atimeMs: now,
+      mtimeMs: now,
+      ctimeMs: now,
+      birthtimeMs: now,
+      atime: new Date(now),
+      mtime: new Date(now),
+      ctime: new Date(now),
+      birthtime: new Date(now),
+    });
+    return stats;
+  }
+
+  stat(path: string): Promise<fs.Stats> {
+    return Promise.resolve(this.statSync(path));
+  }
+
+  statSync(path: string): fs.Stats {
+    const normalized = normalizeVfsPath(path);
+    if (normalized === "/") return createVirtualDirStats();
+
+    const name = normalized.slice(1);
+    if (name.includes("/")) throw enoent(path);
+
+    const value = process.env[name];
+    if (value === undefined || this.secretNames?.has(name)) throw enoent(path);
+
+    return this._fileStats(Buffer.byteLength(value, "utf-8"));
+  }
+
+  lstat(path: string): Promise<fs.Stats> { return this.stat(path); }
+  lstatSync(path: string): fs.Stats { return this.statSync(path); }
+
+  readdir(path: string, options?: object): Promise<any[]> {
+    return Promise.resolve(this.readdirSync(path, options));
+  }
+
+  readdirSync(_path: string, options?: object): any[] {
+    const names = Array.from(this._currentEnvNames());
+    const withTypes = (options as any)?.withFileTypes ?? false;
+    return formatVirtualEntries(names, withTypes);
+  }
+
+  open(path: string, flags: string): Promise<VirtualFileHandle> {
+    return Promise.resolve(this.openSync(path, flags));
+  }
+
+  openSync(path: string, _flags: string): VirtualFileHandle {
+    const normalized = normalizeVfsPath(path);
+    if (normalized === "/") throw enoent(path);
+    const name = normalized.slice(1);
+    if (name.includes("/")) throw enoent(path);
+
+    const value = process.env[name];
+    if (value === undefined || this.secretNames?.has(name)) throw enoent(path);
+
+    // Serve the raw environment variable value
+    return new EnvironmentFileHandle(path, Buffer.from(value, "utf-8"));
+  }
+
+  mkdir(): Promise<void> { return Promise.reject(notSupported("mkdir")); }
+  mkdirSync(): void { throw notSupported("mkdirSync"); }
+  rmdir(): Promise<void> { return Promise.reject(notSupported("rmdir")); }
+  rmdirSync(): void { throw notSupported("rmdirSync"); }
+  unlink(): Promise<void> { return Promise.reject(notSupported("unlink")); }
+  unlinkSync(): void { throw notSupported("unlinkSync"); }
+  rename(): Promise<void> { return Promise.reject(notSupported("rename")); }
+  renameSync(): void { throw notSupported("renameSync"); }
+}
+
+// ---------------------------------------------------------------------------
+// Environment file handle
+// ---------------------------------------------------------------------------
+
+class EnvironmentFileHandle implements VirtualFileHandle {
+  closed = false;
+  readonly path: string;
+  readonly flags = "r";
+  readonly mode = 0o444;
+  position = 0;
+
+  constructor(path: string, private readonly data: Buffer) {
+    this.path = path;
+  }
+
+  read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position?: number | null
+  ): Promise<{ bytesRead: number; buffer: Buffer }> {
+    return Promise.resolve(
+      this.readSync(buffer, offset, length, position),
+    ) as any;
+  }
+
+  readSync(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position?: number | null
+  ): number {
+    const pos = position ?? this.position;
+    const available = Math.max(0, this.data.length - pos);
+    const bytesRead = Math.min(length, available);
+    if (bytesRead > 0) {
+      this.data.copy(buffer, offset, pos, pos + bytesRead);
+    }
+    if (position == null) {
+      this.position = pos + bytesRead;
+    }
+    return bytesRead;
+  }
+
+  write(): Promise<{ bytesWritten: number; buffer: Buffer }> {
+    return Promise.reject(notSupported("write"));
+  }
+  writeSync(): number {
+    throw notSupported("writeSync");
+  }
+
+  readFile(
+    options?: { encoding?: BufferEncoding } | BufferEncoding
+  ): Promise<Buffer | string> {
+    return Promise.resolve(this.readFileSync(options));
+  }
+
+  readFileSync(
+    options?: { encoding?: BufferEncoding } | BufferEncoding
+  ): Buffer | string {
+    const enc =
+      typeof options === "string"
+        ? options
+        : (options as any)?.encoding;
+    return enc ? this.data.toString(enc) : Buffer.from(this.data);
+  }
+
+  writeFile(): Promise<void> {
+    return Promise.reject(notSupported("writeFile"));
+  }
+  writeFileSync(): void {
+    throw notSupported("writeFileSync");
+  }
+
+  stat(): Promise<fs.Stats> {
+    return Promise.resolve(this.statSync());
+  }
+
+  statSync(): fs.Stats {
+    const now = Date.now();
+    const size = this.data.length;
+    const stats = Object.create(fs.Stats.prototype);
+    Object.assign(stats, {
+      dev: 0,
+      mode: 0o100444,
+      nlink: 1,
+      uid: 0,
+      gid: 0,
+      rdev: 0,
+      blksize: 4096,
+      ino: 0,
+      size,
+      blocks: Math.ceil(size / 512),
+      atimeMs: now,
+      mtimeMs: now,
+      ctimeMs: now,
+      birthtimeMs: now,
+      atime: new Date(now),
+      mtime: new Date(now),
+      ctime: new Date(now),
+      birthtime: new Date(now),
+    });
+    return stats;
+  }
+
+  truncate(): Promise<void> {
+    return Promise.reject(notSupported("truncate"));
+  }
+  truncateSync(): void {
+    throw notSupported("truncateSync");
+  }
+
+  close(): Promise<void> {
+    this.closed = true;
+    return Promise.resolve();
+  }
+  closeSync(): void {
+    this.closed = true;
+  }
+}
+
+// Properly wire read() so it returns the expected shape
+(EnvironmentFileHandle.prototype as any).read = function (
+  this: EnvironmentFileHandle,
+  buffer: Buffer,
+  offset: number,
+  length: number,
+  position?: number | null
+): Promise<{ bytesRead: number; buffer: Buffer }> {
+  const bytesRead = this.readSync(buffer, offset, length, position);
+  return Promise.resolve({ bytesRead, buffer });
+};
+
+// ---------------------------------------------------------------------------
 // HTTP hooks
 // ---------------------------------------------------------------------------
 
@@ -433,10 +707,13 @@ function buildHttpHooks(
       const entries = parseSecretsFile(secretsFilePath);
 
       // Build a lookup: placeholder → entry
+      // For secrets added after VM creation, lazily generate and register a placeholder.
       const byPlaceholder = new Map<string, SecretEntry>();
       for (const entry of entries) {
-        const placeholder = placeholders[entry.name];
-        if (placeholder) byPlaceholder.set(placeholder, entry);
+        if (!placeholders[entry.name]) {
+          placeholders[entry.name] = `GONDOLIN_SECRET_${crypto.randomBytes(24).toString("hex")}`;
+        }
+        byPlaceholder.set(placeholders[entry.name], entry);
       }
 
       const hostname = getHostname(request.url);
@@ -512,6 +789,19 @@ export function createSecretsHooks(
   const httpHooks = buildHttpHooks(secretsFilePath, placeholders, allowedHosts);
 
   return { httpHooks, env, vfsMounts };
+}
+
+/**
+ * Create a VFS mount for dynamic environment variables at /run/env.
+ *
+ * @param secretNames Set of secret names that should be excluded from the env VFS.
+ *                    (Secrets take precedence over env vars if both exist.)
+ * @returns VFS mounts object suitable for spreading into VM.create vfs.mounts
+ */
+export function createEnvironmentVfs(secretNames?: Set<string>): Record<string, VirtualProvider> {
+  return {
+    "/run/env": new EnvironmentDirectoryProvider(secretNames) as unknown as VirtualProvider,
+  };
 }
 
 // ---------------------------------------------------------------------------

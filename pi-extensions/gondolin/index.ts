@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import crypto from "node:crypto";
 import {
   type BashOperations,
   createBashTool,
@@ -254,10 +255,15 @@ function buildSecretsExecEnv(
 
   const merged: Record<string, string> = {};
 
-  // 1. Start with secrets placeholders for names currently in the file
+  // 1. Start with secrets placeholders for names currently in the file.
+  //    For secrets added after VM creation, lazily generate a placeholder so
+  //    the guest env var is available immediately (mirroring what secrets-hooks.ts
+  //    does in onRequestHead and SecretsDirectoryProvider._getOrCreatePlaceholder).
   for (const name of currentNames) {
-    const placeholder = info.placeholders[name];
-    if (placeholder) merged[name] = placeholder;
+    if (!info.placeholders[name]) {
+      info.placeholders[name] = `GONDOLIN_SECRET_${crypto.randomBytes(24).toString("hex")}`;
+    }
+    merged[name] = info.placeholders[name];
   }
 
   // 2. Caller env overrides (also covers "don't inject if already set")

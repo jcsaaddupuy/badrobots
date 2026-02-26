@@ -13,7 +13,7 @@ import {
   expandSkillPaths,
   getGuestImagePath,
 } from "./config";
-import { createSecretsHooks } from "./secrets-hooks";
+import { createSecretsHooks, createEnvironmentVfs } from "./secrets-hooks";
 
 const WORKSPACE = "/root/workspace";
 
@@ -176,6 +176,7 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
   // Otherwise fall back to the standard createHttpHooks with static values.
   let httpHooks: any;
   let secretsPlaceholders: Record<string, string> | undefined;
+  let secretNames: Set<string> | undefined;
 
   if (config.secretsFile) {
     if (!fs.existsSync(config.secretsFile)) {
@@ -197,6 +198,8 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
       Object.assign(env, result.env);
       // Add per-secret VFS mounts alongside other mounts
       Object.assign(mounts, result.vfsMounts);
+      // Track secret names so environment VFS can exclude them (secrets take precedence)
+      secretNames = new Set(Object.keys(secretsPlaceholders));
     }
   } else {
     const result = createHttpHooks({
@@ -207,6 +210,11 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
     httpHooks = result.httpHooks;
     Object.assign(env, result.env);
   }
+
+  // Mount environment variables VFS at /run/env (live updates, raw values)
+  // Secrets take precedence: if a name is both a secret and an env var, the secret wins
+  const envVfsMounts = createEnvironmentVfs(secretNames);
+  Object.assign(mounts, envVfsMounts);
   const vmCreateOptions: any = {
     sessionLabel,
     httpHooks,
