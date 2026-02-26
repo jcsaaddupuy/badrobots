@@ -58,6 +58,44 @@ RUN update-ca-certificates
 - Validate dockerfile with hadolint: `hadolint Dockerfile`
 - Ensure the docker builds and runs without error
 
-## Docker Compose
-- When needed, configure build-args in docker compose
-- **DO NOT** pass `http_proxy`, `https_proxy`, `HTTP_PROXY`, `HTTPS_PROXY` environment variables
+## Monorepo Build Context
+
+When services share code (e.g. a `shared/` library), set the build context to the **monorepo root** in docker-compose, not the service subdirectory. This lets all Dockerfiles `COPY` from `shared/`.
+
+```yaml
+# docker-compose.yml at monorepo root
+services:
+  my-service:
+    build:
+      context: .                              # monorepo root
+      dockerfile: services/my-service/Dockerfile
+```
+
+```dockerfile
+# services/my-service/Dockerfile
+WORKDIR /app
+COPY services/my-service/pyproject.toml services/my-service/uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Runtime stage
+COPY services/my-service/src/ ./src/
+COPY shared/ ./shared/                        # shared library available to all services
+
+ENV PYTHONPATH="/app"                         # makes 'from shared.models import ...' work
+CMD ["python", "src/server.py"]
+```
+
+Also add a root-level `.dockerignore` to exclude `.venv`, `__pycache__`, etc. from all service builds.
+
+## PYTHONPATH for Flat src/ Layout
+
+When code lives under `src/` and is run as `python src/main.py` (not as a package), set:
+
+```dockerfile
+# If src/ contains modules AND shared/ needs to be importable:
+ENV PYTHONPATH="/app/src:/app"
+# import config        → finds /app/src/config.py
+# from shared.models import ...  → finds /app/shared/models.py
+```
+
+
