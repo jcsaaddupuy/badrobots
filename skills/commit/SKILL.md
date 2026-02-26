@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Read this skill before making git commits"
+description: "Git commit message conventions and formatting"
 ---
 
 # Git Commit - Agent Usage Guide

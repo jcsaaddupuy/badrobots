@@ -1,6 +1,6 @@
 ---
 name: pipeline-fix
-description: Comprehensive guide for diagnosing and fixing failed CI/CD pipelines in GitLab
+description: "Diagnose and fix failed GitLab CI/CD pipelines"
 ---
 
 # Pipeline Fix - Agent Guide

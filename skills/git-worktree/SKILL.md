@@ -1,6 +1,6 @@
 ---
 name: git-worktree
-description: Comprehensive guide for using git worktree to manage multiple working directories for parallel development
+description: "Manage multiple working directories with git worktree for parallel development"
 ---
 
 # Git Worktree - Parallel Development Guide

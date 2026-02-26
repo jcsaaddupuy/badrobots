@@ -1,6 +1,6 @@
 ---
 name: context7
-description: Search and retrieve library documentation using Context7 API
+description: "Query library documentation via Context7 API"
 ---
 
 # Context7 API - Agent Usage Guide

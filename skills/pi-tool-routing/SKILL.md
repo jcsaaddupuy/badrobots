@@ -1,6 +1,6 @@
 ---
 name: pi-tool-routing
-description: Advanced patterns for routing pi tools through custom backends (VMs, sandboxes, proxies) and persisting extension state across reloads. Use when building extensions that wrap or intercept read, write, edit, or bash tools to add isolation, access control, or resource routing. Covers tool registration, runtime decision logic, state persistence with globalThis, filesystem path mapping, custom Operations objects, and environment handling.
+description: "Route pi tools through custom backends (VMs, sandboxes) with state persistence"
 ---
 
 # Pi Tool Routing and State Persistence

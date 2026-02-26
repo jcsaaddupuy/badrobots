@@ -1,6 +1,6 @@
 ---
 name: docker
-description: Comprehensive guide for Docker and Docker Compose usage
+description: "Docker and Docker Compose reference guide"
 ---
 
 # Docker - Agent Usage Guide

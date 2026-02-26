@@ -1,6 +1,6 @@
 ---
 name: langgraph
-description: Comprehensive guide for LangGraph development
+description: "LangGraph framework for AI agent workflows"
 ---
 
 # LangGraph - Agent Usage Guide

@@ -1,6 +1,6 @@
 ---
 name: litellm-provider-extension
-description: Create or debug a Pi extension that registers a LiteLLM proxy as a provider, handling model discovery, parameter compatibility, and streaming. Use when integrating LiteLLM with Pi or troubleshooting proxy-based model providers.
+description: "Pi extension for LiteLLM proxy provider integration"
 ---
 
 # LiteLLM Provider Extension

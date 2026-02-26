@@ -1,6 +1,6 @@
 ---
 name: python-uv
-description: Guide for using uv as Python package manager and interpreter.
+description: "uv package manager and Python interpreter"
 ---
 
 # uv - Agent Usage Guide for Python Projects

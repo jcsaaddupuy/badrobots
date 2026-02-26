@@ -1,6 +1,6 @@
 ---
 name: openai
-description: Guide for OpenAI API integration
+description: "OpenAI API integration guide"
 ---
 
 # OpenAI API - Agent Usage Guide

@@ -1,6 +1,6 @@
 ---
 name: mq
-description: Markdown Query Language CLI for extracting, filtering, and processing markdown content with a jq-like syntax. Use when needing to extract headings, code blocks, links, tables, or other markdown elements from files - especially when filtering by attributes (e.g. code blocks by language, headings by depth). Perfect for analyzing documentation, extracting code examples, building indexes, or processing multiple markdown files efficiently.
+description: "Query markdown content like jq (headings, code blocks, tables, links)"
 ---
 
 # mq - Markdown Query Language

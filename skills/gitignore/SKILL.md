@@ -1,6 +1,6 @@
 ---
 name: gitignore
-description: Use this skill when generating .gitignore for a project
+description: "Generate .gitignore files for projects"
 ---
 
 # GitIgnore Generation Skill

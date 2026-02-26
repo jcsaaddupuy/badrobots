@@ -1,6 +1,6 @@
 ---
 name: strandagents
-description: Comprehensive guide for Strands Agents SDK development with Python. Use when building AI agents with Strands, including OpenAI integration, custom tools, multi-agent systems, security, Docker deployment, testing, observability, and MCP server integration. Covers installation, configuration, best practices, and production deployment patterns.
+description: "Strands Agents SDK: build Python AI agents with OpenAI, tools, Docker"
 ---
 
 # Strands Agents SDK

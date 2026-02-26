@@ -1,6 +1,6 @@
 ---
 name: cloud-diagrams
-description: Create cloud architecture diagrams as code using Python and the mingrammer/diagrams library. Use when visualizing AWS, GCP, Azure, Kubernetes, or multi-cloud architectures.
+description: "Generate cloud architecture diagrams as code (AWS, GCP, Azure, K8s)"
 ---
 
 # Cloud Architecture Diagrams

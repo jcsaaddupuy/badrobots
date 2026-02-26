@@ -1,6 +1,6 @@
 ---
 name: deepwiki
-description: Search and retrieve comprehensive documentation from DeepWiki for 300+ indexed repositories. Use for documentation lookups, architecture exploration, API reference queries, and learning about popular frameworks and libraries.
+description: "Search 300+ indexed repositories for documentation and API references"
 ---
 
 # DeepWiki Documentation Access

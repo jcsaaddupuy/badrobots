@@ -1,6 +1,6 @@
 ---
 name: yq
-description: Comprehensive guide for parsing and manipulating YAML using yq
+description: "YAML parsing and manipulation with yq"
 ---
 
 # yq - YAML/JSON Processing - Agent Usage Guide

@@ -1,6 +1,6 @@
 ---
 name: gitlab-ci
-description: Guide for GitLab CI/CD configuration
+description: "GitLab CI/CD configuration guide"
 ---
 
 # GitLab CI - Agent Usage Guide

@@ -1,6 +1,6 @@
 ---
 name: session-logs
-description: Search and analyze your own session logs (older/parent conversations) using jq.
+description: "Search and analyze session logs with jq"
 metadata: { "pi": { "emoji": "📜", "requires": { "bins": ["jq", "rg"] } } }
 ---
 

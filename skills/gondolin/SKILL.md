@@ -1,6 +1,6 @@
 ---
 name: gondolin
-description: Create isolated micro-VMs for secure code execution using Gondolin. Use for running untrusted code, package installation sandboxing, testing in clean environments, or cross-platform builds. Supports network policy, virtual filesystems, secret injection, and custom guest images.
+description: "Isolated micro-VMs for sandboxed code execution (untrusted code, testing, builds)"
 ---
 
 # Gondolin - Secure Micro-VM Sandboxing

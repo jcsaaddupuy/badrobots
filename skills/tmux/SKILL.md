@@ -1,6 +1,6 @@
 ---
 name: tmux
-description: "Use this skills when you need to use tmux."
+description: "tmux terminal multiplexer reference"
 license: Vibecoded
 ---
 

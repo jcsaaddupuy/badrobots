@@ -1,6 +1,6 @@
 ---
 name: general
-description: General coding rules and principles for all projects
+description: "Universal coding principles and best practices"
 ---
 
 # Generale behaviour

@@ -1,6 +1,6 @@
 ---
 name: revealjs
-description: Create, edit, and work with reveal.js HTML presentations. Use when creating slide decks, interactive presentations, or converting content to reveal.js format. Supports Markdown slides, themes, animations, fragments, speaker notes, PDF export, and advanced features like auto-animate and vertical slides.
+description: "Create reveal.js HTML presentations with Markdown, themes, animations"
 ---
 
 # Reveal.js Presentations

@@ -1,6 +1,6 @@
 ---
 name: jq
-description: Comprehensive guide for parsing and manipulating JSON using jq
+description: "JSON parsing and manipulation with jq"
 ---
 
 # jq - JSON Processing - Agent Usage Guide

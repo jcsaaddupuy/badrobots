@@ -1,6 +1,6 @@
 ---
 name: glab
-description: Guide for using glab cli tool to interact with gitlab
+description: "glab CLI for GitLab operations (MRs, issues, pipelines)"
 ---
 
 # glab CLI - Agent Usage Guide

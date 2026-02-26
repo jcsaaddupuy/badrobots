@@ -1,6 +1,6 @@
 ---
 name: mermaid
-description: Comprehensive guide for generating diagrams using Mermaid syntax
+description: "Generate diagrams with Mermaid syntax"
 ---
 
 # Mermaid Diagrams - Agent Usage Guide

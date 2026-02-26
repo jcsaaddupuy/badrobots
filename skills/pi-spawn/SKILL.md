@@ -1,6 +1,6 @@
 ---
 name: pi-spawn
-description: USe this skil to spawn pi sub-agents with different models/providers in tmux sessions for parallel work or specialized tasks
+description: "Spawn parallel pi sub-agents with different models/providers"
 ---
 
 # Pi Spawn - Sub-Agent Management

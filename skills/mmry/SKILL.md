@@ -1,6 +1,6 @@
 ---
 name: mmry
-description: Persistent memory management for AI agents using the mmry system. Use when you need to capture principles, patterns, and insights that improve decision-making. Memories are a knowledge base of essence (what you learned), not a history log (what you did). Complement todos (ephemeral tasks) and skills (procedural knowledge). Supports semantic search, multiple memory types (episodic, semantic, procedural), categories, tags, and importance levels.
+description: "Persistent semantic memory for agents (principles, patterns, insights)"
 ---
 
 # mmry - Persistent Memory for Agents

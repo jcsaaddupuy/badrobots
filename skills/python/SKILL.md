@@ -1,6 +1,6 @@
 ---
 name: python
-description: Comprehensive guide for Python development with modern tooling
+description: "Python development with modern tooling"
 ---
 
 # Python Development - Agent Usage Guide

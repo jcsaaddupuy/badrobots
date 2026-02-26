@@ -1,6 +1,6 @@
 ---
 name: mmry-best-practices
-description: Best practices for creating memories with proper categorization, tagging, and metadata. ALWAYS use categories and tags when adding memories - never create bare memories.
+description: "Memory creation best practices: categorization, tagging, metadata"
 ---
 
 # mmry Best Practices - Memory Creation Guidelines
