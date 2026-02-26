@@ -1,0 +1,37 @@
+{
+  "arch": "aarch64",
+  "distro": "alpine",
+  "alpine": {
+    "version": "3.23.0",
+    "kernelPackage": "linux-virt",
+    "kernelImage": "vmlinuz-virt",
+    "rootfsPackages": [
+      "linux-virt",
+      "rng-tools",
+      "bash",
+      "ca-certificates",
+      "curl",
+      "nodejs",
+      "npm",
+      "uv",
+      "python3",
+      "openssh"
+    ],
+    "initramfsPackages": []
+  },
+  "rootfs": {
+    "label": "gondolin-root"
+  },
+  "postBuild": {
+    "commands": [
+      "echo 'Entering post build'",
+      "apk update && apk upgrade",
+      "apk add --no-cache nodejs npm cmake build-base musl-dev",
+      "apk add --no-cache ripgrep fd curl lynx",
+      "apk add --no-cache tmux",
+      "npm install -g @mariozechner/pi-coding-agent",
+      "ln -sf /usr/local/bin/pi /usr/bin/pi || true",
+      "which pi && pi --version || echo 'Warning: pi not found in PATH'"
+    ]
+  }
+}
