@@ -8,7 +8,7 @@ description: "Memory creation best practices: categorization, tagging, metadata"
 ## Core Rule: ALWAYS Add Categories and Tags
 
 **NEVER create a memory without categories and tags.** Every memory must have:
-1. **memory_type**: episodic | semantic | procedural
+1. **memory_type**: episodic | semantic | procedural | preferences
 2. **category**: Organize by domain/topic
 3. **tags**: 3-5 tags for filtering and discovery
 4. **importance**: 1-10 scale (critical decisions)
@@ -22,6 +22,7 @@ description: "Memory creation best practices: categorization, tagging, metadata"
 - Integration patterns and best practices
 - Design decisions and their rationale
 - Lessons learned from debugging
+- Explicit user preferences and work patterns
 
 **Tags**: Use domain-specific tags (e.g., `architecture`, `database`, `api`, `security`)
 
