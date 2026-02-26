@@ -23,4 +23,4 @@
 
 
 ## Comprehensive sumaries, final summaries, completion reports
-Itis crucial to keep them short short. Less that 50 lines is a good targe
+It is crucial to keep them short short. Less that 50 lines is a good target
