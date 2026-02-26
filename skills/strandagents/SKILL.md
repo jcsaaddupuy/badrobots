@@ -14,9 +14,10 @@ Use this skill when:
 - Integrating OpenAI or other LLM providers
 - Creating custom tools for agents
 - Implementing multi-agent systems
-- Deploying agents with Docker
+- Deploying agents with Docker or BedrockAgentCore
 - Setting up security and observability
-- Integrating MCP servers
+- Integrating MCP servers (stdio or SSE transport)
+- Using MCP sampling (server-side LLM calls routed through agent)
 - Testing agent applications
 
 ## Quick Start
@@ -167,14 +168,22 @@ See [references/testing.md](references/testing.md) for:
 ### 8. MCP Integration
 
 See [references/mcp.md](references/mcp.md) for:
-- Connecting to MCP servers
+- Connecting to MCP servers (stdio and SSE transports)
+- MCP sampling — server calls back to agent for LLM inference
+- Session management with FileSessionManager / S3SessionManager
 - Tool filtering and prefixes
 - Multiple servers
-- MCP prompts and resources
-- Popular MCP servers
-- Error handling
-- Best practices
-- Custom MCP servers
+- Error handling and best practices
+
+### 9. AgentCore Runtime
+
+See [references/agentcore.md](references/agentcore.md) for:
+- Replacing FastAPI with `BedrockAgentCoreApp`
+- `@app.entrypoint` decorator
+- `RequestContext` and session_id from headers
+- Full Strands Agent integration example
+- Docker healthcheck (`/ping`)
+- Key constraints (asyncio.to_thread, per-request MCPClient)
 
 ## Development Workflow
 
@@ -416,14 +425,15 @@ response = coordinator("Research AI trends")
 
 ### Reference Files
 - [quickstart.md](references/quickstart.md) - Installation and basic usage
-- [openai.md](references/openai.md) - OpenAI integration
+- [openai.md](references/openai.md) - OpenAI integration, base_url, structured output
 - [tools.md](references/tools.md) - Custom tools
 - [security.md](references/security.md) - Security best practices
 - [docker.md](references/docker.md) - Docker deployment
 - [multi-agent.md](references/multi-agent.md) - Multi-agent systems
 - [observability.md](references/observability.md) - Monitoring and telemetry
 - [testing.md](references/testing.md) - Testing strategies
-- [mcp.md](references/mcp.md) - MCP server integration
+- [mcp.md](references/mcp.md) - MCP integration (stdio, SSE, sampling, sessions)
+- [agentcore.md](references/agentcore.md) - BedrockAgentCoreApp runtime
 
 ## Examples
 

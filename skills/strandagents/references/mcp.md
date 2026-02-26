@@ -70,9 +70,175 @@ client = MCPClient(
 )
 ```
 
-## Multiple MCP Servers
+## MCP over SSE (Containerized / Network Transport)
 
-Combine tools from multiple servers:
+Use SSE when MCP servers run as **independent processes or containers** — stdio only works for subprocesses within the same host. FastMCP supports both transports.
+
+### Server (SSE mode)
+
+```python
+# server.py
+import os
+from mcp.server.fastmcp import FastMCP
+
+PORT = int(os.getenv("PORT", 3001))
+mcp = FastMCP("my-mcp-server", host="0.0.0.0", port=PORT)
+
+@mcp.tool(description="My tool")
+def my_tool(param: str) -> dict:
+    return {"result": param}
+
+if __name__ == "__main__":
+    mcp.run(transport="sse")   # binds to 0.0.0.0:PORT, SSE endpoint at /sse
+```
+
+### Client (SSE mode)
+
+```python
+from strands.tools.mcp import MCPClient
+from mcp.client.sse import sse_client
+
+# MCPClient works identically over SSE
+semantic_client = MCPClient(lambda: sse_client("http://semantic-mcp:3001/sse"))
+sql_exec_client  = MCPClient(lambda: sse_client("http://sql-exec-mcp:3003/sse"))
+
+agent = Agent(tools=[semantic_client, sql_exec_client, ...])
+```
+
+### Transport selection rule
+
+| Scenario | Transport |
+|---|---|
+| Local dev, server is a subprocess | `stdio_client` |
+| Docker / separate containers | `sse_client` |
+| Production microservices | `sse_client` |
+
+---
+
+## MCP Sampling (Server calls back to Agent for LLM)
+
+MCP sampling lets a server call back to the client to run LLM inference. The server never holds an API key — the agent owns the LLM provider.
+
+**Problem**: `Strands MCPClient` does NOT wire `sampling_callback` to its internal `ClientSession`. Use a `@strands.tool` that manages its own `ClientSession` directly.
+
+### Server side
+
+```python
+# server.py — model-agnostic, just calls ctx.session.create_message()
+from mcp.server.fastmcp import FastMCP, Context
+from mcp.types import SamplingMessage, TextContent
+from pydantic import BaseModel
+
+class SQLGenResult(BaseModel):
+    sql: str
+    explanation: str
+    confidence: float
+
+mcp = FastMCP("sql-generation-mcp", host="0.0.0.0", port=3002)
+
+@mcp.tool(description="Generate SQL via MCP sampling")
+async def generate_sql(user_query: str, ctx: Context) -> dict:
+    result = await ctx.session.create_message(
+        messages=[SamplingMessage(role="user", content=TextContent(type="text", text=user_query))],
+        system_prompt="You are a SQL expert. Return JSON: {sql, explanation, confidence}",
+        max_tokens=1024,
+    )
+    # Validate before returning
+    parsed = SQLGenResult.model_validate_json(result.content.text)
+    return parsed.model_dump()
+```
+
+### Agent side (sampling_callback)
+
+```python
+# sql_generation_tool.py
+import asyncio, openai
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+from mcp.shared.context import RequestContext
+from mcp.types import CreateMessageRequestParams, CreateMessageResult, ErrorData, INTERNAL_ERROR, TextContent
+from strands import tool
+
+async def _sampling_callback(
+    context: RequestContext,
+    params: CreateMessageRequestParams,
+) -> CreateMessageResult | ErrorData:
+    """Agent-side LLM call, triggered by MCP server via ctx.session.create_message()."""
+    try:
+        messages = []
+        if params.systemPrompt:
+            messages.append({"role": "system", "content": params.systemPrompt})
+        for msg in params.messages:
+            text = msg.content.text if hasattr(msg.content, "text") else str(msg.content)
+            messages.append({"role": msg.role, "content": text})
+
+        # Use structured output to guarantee schema conformance
+        client = openai.OpenAI(api_key=..., base_url=...)
+        response = client.beta.chat.completions.parse(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=params.maxTokens,
+            response_format=SQLGenResult,
+        )
+        parsed: SQLGenResult = response.choices[0].message.parsed
+        return CreateMessageResult(
+            role="assistant",
+            content=TextContent(type="text", text=parsed.model_dump_json()),
+            model="gpt-4o",
+            stopReason="endTurn",
+        )
+    except Exception as e:
+        return ErrorData(code=INTERNAL_ERROR, message=str(e))
+
+
+async def _call_tool(user_query: str) -> SQLGenResult:
+    # Use sse_client + ClientSession directly to wire sampling_callback
+    async with sse_client("http://sql-generation-mcp:3002/sse") as (read, write):
+        async with ClientSession(read, write, sampling_callback=_sampling_callback) as session:
+            await session.initialize()
+            result = await session.call_tool("generate_sql", {"user_query": user_query})
+    for block in result.content:
+        if hasattr(block, "text"):
+            return SQLGenResult.model_validate_json(block.text)
+    raise ValueError("No text content returned")
+
+
+@tool
+def generate_sql(user_query: str) -> str:
+    """Generate SQL — routes LLM call back to agent via MCP sampling."""
+    result = asyncio.run(_call_tool(user_query))
+    return result.model_dump_json()
+```
+
+### Why @tool instead of MCPClient for sampling servers
+
+`MCPClient` creates a `ClientSession` without `sampling_callback` — the callback would silently fail. Wrapping in a `@tool` with manual `ClientSession(sampling_callback=...)` is the correct pattern until Strands SDK wires it natively.
+
+---
+
+## Session Management
+
+```python
+from strands import Agent
+from strands.session import FileSessionManager
+from strands.agent.conversation_manager import SlidingWindowConversationManager
+
+agent = Agent(
+    model=model,
+    tools=[...],
+    session_manager=FileSessionManager(
+        session_id="user-123",
+        storage_dir="/tmp/strands/sessions",   # or use S3SessionManager for prod
+    ),
+    conversation_manager=SlidingWindowConversationManager(window_size=20),
+)
+```
+
+For multi-replica production deployments, use `S3SessionManager` instead of `FileSessionManager`.
+
+---
+
+
 
 ```python
 from strands import Agent
