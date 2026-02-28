@@ -1,11 +1,25 @@
 /**
  * VM Creation Options Builder
- * Constructs VM creation options from GondolinConfig
+ *
+ * Orchestrates three independent concerns in strict order:
+ * 1. Exec env (config.environment → resolveEnvironmentVars)
+ * 2. HTTP secrets (config.secrets → createHttpHooks, VFS secrets → onRequestHead wrapper)
+ * 3. VFS file mounts (gondolin-vfs-* packages)
+ *
+ * The guest NEVER sees a real secret value — only GONDOLIN_SECRET_<hex> placeholders.
  */
 
-import { RealFSProvider, ReadonlyProvider, MemoryProvider, createHttpHooks } from "@earendil-works/gondolin";
+import crypto from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
+import {
+  RealFSProvider,
+  ReadonlyProvider,
+  MemoryProvider,
+  createHttpHooks,
+  HttpRequestBlockedError,
+} from "@earendil-works/gondolin";
+import type { HttpHookRequest, HttpHookRequestHeadResult } from "@earendil-works/gondolin";
 import {
   type GondolinConfig,
   resolveEnvironmentVars,
@@ -13,9 +27,18 @@ import {
   expandSkillPaths,
   getGuestImagePath,
 } from "./config";
-import { createSecretsHooks, createEnvironmentVfs } from "./secrets-hooks";
+import {
+  instantiateVFSProviders,
+  buildVFSMounts,
+  type VFSProviderInstance,
+  type SecretVFSProvider,
+} from "./vfs";
 
 const WORKSPACE = "/root/workspace";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface VMCreationContext {
   vmName: string;
@@ -34,40 +57,270 @@ export interface BuildVMOptionsResult {
   warnings: string[];
   skillPaths: string[];
   customMounts: { guestPath: string; hostPath: string; writable: boolean }[];
+  /** True if any provider with providesSecrets:true was successfully instantiated */
   secretsMounted: boolean;
-  /** Only set when secretsFile is configured and exists. */
-  secretsInfo?: {
-    filePath: string;
-    /** NAME → placeholder mapping from createSecretsHooks */
-    placeholders: Record<string, string>;
-  };
 }
 
+type VfsSecretEntry = {
+  name: string;
+  placeholder: string;
+  hosts: string[];
+  provider: SecretVFSProvider;
+};
+
+// ---------------------------------------------------------------------------
+// Host pattern matching (mirrors gondolin's internal matchesAnyHost)
+// ---------------------------------------------------------------------------
+
+function matchHostnamePattern(hostname: string, pattern: string): boolean {
+  const p = pattern.trim().toLowerCase();
+  if (!p) return false;
+  if (p === "*") return true;
+  const escaped = p
+    .split("*")
+    .map(s => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${escaped}$`, "i").test(hostname);
+}
+
+function matchesAnyHostPattern(hostname: string, patterns: string[]): boolean {
+  return patterns.some(p => matchHostnamePattern(hostname, p));
+}
+
+function extractHostname(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main builder
+// ---------------------------------------------------------------------------
+
 /**
- * Build VM creation options from configuration
+ * Build VM creation options from configuration.
+ * Implements the 10-step orchestration described in TODO-4.
  */
 export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOptionsResult> {
   const warnings: string[] = [];
   const { config, vmName, localCwd, sessionId, overrides } = ctx;
 
-  // Build session label
   const PI_PREFIX = "pi:";
   const sessionLabel = `${PI_PREFIX}${sessionId}:${vmName}`;
 
-  // Build VFS mounts
+  // =======================================================================
+  // Step 1 — Resolve exec env from config.environment
+  // =======================================================================
+  let execEnv: Record<string, string> = {};
+
+  if (Object.keys(config.environment).length > 0) {
+    const { env: resolvedEnv, warnings: envWarnings } = resolveEnvironmentVars(config.environment);
+    execEnv = resolvedEnv;
+    envWarnings.forEach(w => warnings.push(w));
+  }
+
+  // =======================================================================
+  // Step 2 — Prepare static secrets from config.secrets
+  // =======================================================================
+  let staticSecrets: Record<string, { hosts: string[]; value: string }> = {};
+
+  if (Object.keys(config.secrets).length > 0) {
+    const { secrets, warnings: secretWarnings } = prepareSecretsForGondolin(config.secrets);
+    staticSecrets = secrets;
+    secretWarnings.forEach(w => warnings.push(w));
+  }
+
+  // =======================================================================
+  // Step 3 — Discover and instantiate all VFS providers
+  // =======================================================================
+  const { instances, warnings: vfsWarnings, errors: vfsErrors } = instantiateVFSProviders(config);
+  vfsWarnings.forEach(w => warnings.push(w));
+  vfsErrors.forEach(e => warnings.push(`VFS [${e.packageName}]: ${e.error}`));
+
+  // =======================================================================
+  // Step 4 — Pull secret names from VFS providers, generate placeholders
+  // =======================================================================
+  const vfsSecretEntries: VfsSecretEntry[] = [];
+
+  for (const inst of instances) {
+    if (!inst.manifest.providesSecrets) continue;
+
+    const provider = inst.provider as unknown as SecretVFSProvider;
+    if (typeof provider.listSecrets !== "function" || typeof provider.setPlaceholders !== "function") {
+      warnings.push(
+        `VFS [${inst.packageName}]: manifest declares providesSecrets but provider missing listSecrets/setPlaceholders`
+      );
+      continue;
+    }
+
+    let secrets: Array<{ name: string; hosts: string[] }>;
+    try {
+      secrets = provider.listSecrets();
+    } catch (err) {
+      warnings.push(`VFS [${inst.packageName}]: listSecrets threw: ${err}`);
+      continue;
+    }
+
+    const ownPlaceholders = new Map<string, string>();
+
+    for (const secret of secrets) {
+      const { name, hosts } = secret;
+
+      // Conflict: config.secrets wins
+      if (staticSecrets[name]) {
+        warnings.push(`Secret "${name}" from VFS [${inst.packageName}] conflicts with config.secrets — ignored`);
+        continue;
+      }
+      // Conflict: another VFS provider already owns this name
+      const existing = vfsSecretEntries.find(e => e.name === name);
+      if (existing) {
+        warnings.push(`Secret "${name}" from VFS [${inst.packageName}] already registered — ignored`);
+        continue;
+      }
+
+      const placeholder = `GONDOLIN_SECRET_${crypto.randomBytes(24).toString("hex")}`;
+      vfsSecretEntries.push({ name, placeholder, hosts, provider });
+      ownPlaceholders.set(name, placeholder);
+    }
+
+    try {
+      provider.setPlaceholders(ownPlaceholders);
+    } catch (err) {
+      warnings.push(`VFS [${inst.packageName}]: setPlaceholders threw: ${err}`);
+    }
+  }
+
+  // =======================================================================
+  // Step 5 — Build full secret name set
+  // =======================================================================
+  const allSecretNames = new Set<string>([
+    ...Object.keys(staticSecrets),
+    ...vfsSecretEntries.map(e => e.name),
+  ]);
+
+  // =======================================================================
+  // Step 6 — Notify secret-aware VFS providers (e.g. gondolin-vfs-environment)
+  // =======================================================================
+  for (const inst of instances) {
+    const provider = inst.provider as any;
+    if (typeof provider.setSecretNames === "function") {
+      try {
+        const conflicts: string[] = provider.setSecretNames(allSecretNames);
+        if (Array.isArray(conflicts)) {
+          for (const name of conflicts) {
+            warnings.push(
+              `Environment variable "${name}" in VFS provider ${inst.packageName} conflicts with a secret — excluded from /run/env`
+            );
+          }
+        }
+      } catch (err) {
+        warnings.push(`VFS [${inst.packageName}]: setSecretNames threw: ${err}`);
+      }
+    }
+  }
+
+  // =======================================================================
+  // Step 7 — createHttpHooks (config.secrets only — gondolin native)
+  // =======================================================================
+  const hooksResult = createHttpHooks({
+    allowedHosts: [
+      ...config.network.allowedHosts,
+      // Also allow hosts declared by VFS secret providers
+      ...vfsSecretEntries.flatMap(e => e.hosts),
+    ],
+    blockInternalRanges: config.network.blockInternalRanges,
+    secrets: staticSecrets,
+  });
+
+  const httpHooks = hooksResult.httpHooks;
+  const staticPlaceholderEnv = hooksResult.env;
+
+  // =======================================================================
+  // Step 8 — Wrap onRequestHead for live VFS secrets
+  // =======================================================================
+  if (vfsSecretEntries.length > 0) {
+    const originalOnRequestHead = httpHooks.onRequestHead;
+
+    httpHooks.onRequestHead = async (request: HttpHookRequest): Promise<HttpHookRequestHeadResult> => {
+      const hostname = extractHostname(request.url);
+      let headers = { ...request.headers };
+
+      // Substitute VFS secret placeholders with live values
+      for (const entry of vfsSecretEntries) {
+        let hasPlaceholder = false;
+
+        for (const [key, val] of Object.entries(headers)) {
+          if (!val?.includes(entry.placeholder)) continue;
+          hasPlaceholder = true;
+
+          if (!matchesAnyHostPattern(hostname, entry.hosts)) {
+            throw new HttpRequestBlockedError(
+              `secret ${entry.name} not allowed for host: ${hostname || "unknown"}`
+            );
+          }
+
+          headers[key] = val.split(entry.placeholder).join(entry.provider.getSecretValue(entry.name));
+        }
+
+        // Defense-in-depth: block real secret value going to unauthorized host
+        if (!hasPlaceholder) {
+          const realVal = entry.provider.getSecretValue(entry.name);
+          if (realVal && !matchesAnyHostPattern(hostname, entry.hosts)) {
+            for (const val of Object.values(headers)) {
+              if (val?.includes(realVal)) {
+                throw new HttpRequestBlockedError(
+                  `secret ${entry.name} not allowed for host: ${hostname || "unknown"}`
+                );
+              }
+            }
+          }
+        }
+      }
+
+      // Delegate to gondolin's original handler for config.secrets substitution
+      if (originalOnRequestHead) {
+        const result = await originalOnRequestHead({ ...request, headers });
+        return result ?? ({ ...request, headers } as HttpHookRequestHeadResult);
+      }
+      return { ...request, headers } as HttpHookRequestHeadResult;
+    };
+  }
+
+  // =======================================================================
+  // Step 9 — Assemble final VM env
+  // =======================================================================
+  const guestHomeDir = config.sandbox.homeDir || "/root";
+  const guestTmpDir = "/tmp";
+
+  const vfsPlaceholderEnv = Object.fromEntries(
+    vfsSecretEntries.map(e => [e.name, e.placeholder])
+  );
+
+  const env: Record<string, string> = {
+    HOME: guestHomeDir,
+    TMPDIR: guestTmpDir,
+    PI_TMUX_SOCKET_DIR: `${guestTmpDir}/pi-tmux-sockets`,
+    ...execEnv,              // plain declared vars
+    ...staticPlaceholderEnv, // config.secrets placeholders (gondolin-generated)
+    ...vfsPlaceholderEnv,    // VFS secrets placeholders (vm-builder-generated)
+  };
+
+  // =======================================================================
+  // Step 10 — Build VFS mounts and create VM options
+  // =======================================================================
   const mounts: Record<string, any> = {};
 
   // Handle CWD mounting
   const mountCwd = overrides?.mountCwd ?? config.workspace.mountCwd;
   if (mountCwd) {
-    const cwdWritable = config.workspace.cwdWritable;
-    if (cwdWritable) {
+    if (config.workspace.cwdWritable) {
       mounts[WORKSPACE] = new RealFSProvider(localCwd);
     } else {
       mounts[WORKSPACE] = new ReadonlyProvider(new RealFSProvider(localCwd));
     }
   } else {
-    // Empty workspace when mounting disabled
     mounts[WORKSPACE] = new MemoryProvider();
   }
 
@@ -78,12 +331,10 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
   if (mountSkills) {
     const skillsReadOnly = overrides?.skillsReadOnly ?? config.skills.readOnly;
 
-    // Mount default skills
     if (config.skills.mountDefault) {
       const homeDir = process.env.HOME || "/root";
       const skillsBaseDir = path.join(homeDir, ".pi/agent/skills");
 
-      // Verify directory exists
       if (fs.existsSync(skillsBaseDir)) {
         const fsProvider = new RealFSProvider(skillsBaseDir);
         mounts["/root/.pi/agent/skills"] = skillsReadOnly
@@ -95,20 +346,15 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
       }
     }
 
-    // Mount custom skill paths
     if (config.skills.customPaths.length > 0) {
       const { expanded, warnings: expandWarnings } = expandSkillPaths(config.skills.customPaths);
 
       for (let i = 0; i < expanded.length; i++) {
         const skillPath = expanded[i];
-
-        // Verify path exists
         if (!fs.existsSync(skillPath)) {
           warnings.push(`Custom skill path not found: ${skillPath}`);
           continue;
         }
-
-        // Mount at a numbered path
         const guestPath = `/root/.pi/skills/${i}`;
         const fsProvider = new RealFSProvider(skillPath);
         mounts[guestPath] = skillsReadOnly
@@ -135,86 +381,11 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
     }
   }
 
-  // Build environment variables
-  let env: Record<string, string> = {};
+  // Mount external VFS providers (gondolin-vfs-* packages)
+  const vfsMountMap = buildVFSMounts(instances);
+  Object.assign(mounts, vfsMountMap);
 
-  if (Object.keys(config.environment).length > 0) {
-    const { env: resolvedEnv, warnings: envWarnings } = resolveEnvironmentVars(config.environment);
-    env = resolvedEnv;
-    envWarnings.forEach(w => warnings.push(w));
-  }
-
-  // Set default environment variables for VM
-  // These are essential for tools like tmux to work correctly
-  const guestHomeDir = config.sandbox.homeDir || "/root";
-  const guestTmpDir = "/tmp";
-  
-  // Only set if not already configured by user
-  if (!env.HOME) {
-    env.HOME = guestHomeDir;
-  }
-  if (!env.TMPDIR) {
-    env.TMPDIR = guestTmpDir;
-  }
-  if (!env.PI_TMUX_SOCKET_DIR) {
-    env.PI_TMUX_SOCKET_DIR = `${guestTmpDir}/pi-tmux-sockets`;
-  }
-
-  // Prepare secrets
-  let secrets: Record<string, { hosts: string[]; value: string }> = {};
-
-  if (Object.keys(config.secrets).length > 0) {
-    const { secrets: preparedSecrets, warnings: secretWarnings } = prepareSecretsForGondolin(
-      config.secrets
-    );
-    secrets = preparedSecrets;
-    secretWarnings.forEach(w => warnings.push(w));
-  }
-
-  // Build network hooks
-  // If a secretsFile is configured, use createSecretsHooks for live resolution.
-  // Otherwise fall back to the standard createHttpHooks with static values.
-  let httpHooks: any;
-  let secretsPlaceholders: Record<string, string> | undefined;
-  let secretNames: Set<string> | undefined;
-
-  if (config.secretsFile) {
-    if (!fs.existsSync(config.secretsFile)) {
-      warnings.push(`Secrets file not found: ${config.secretsFile} — secrets will not be mounted`);
-      const result = createHttpHooks({
-        allowedHosts: config.network.allowedHosts,
-        blockInternalRanges: config.network.blockInternalRanges,
-        secrets,
-      });
-      httpHooks = result.httpHooks;
-      Object.assign(env, result.env);
-    } else {
-      const result = createSecretsHooks(config.secretsFile, {
-        extraAllowedHosts: config.network.allowedHosts,
-      });
-      httpHooks = result.httpHooks;
-      // result.env contains only NAME → placeholder entries
-      secretsPlaceholders = { ...result.env };
-      Object.assign(env, result.env);
-      // Add per-secret VFS mounts alongside other mounts
-      Object.assign(mounts, result.vfsMounts);
-      // Track secret names so environment VFS can exclude them (secrets take precedence)
-      secretNames = new Set(Object.keys(secretsPlaceholders));
-    }
-  } else {
-    const result = createHttpHooks({
-      allowedHosts: config.network.allowedHosts,
-      blockInternalRanges: config.network.blockInternalRanges,
-      secrets,
-    });
-    httpHooks = result.httpHooks;
-    Object.assign(env, result.env);
-  }
-
-  // Mount environment variables VFS at /run/env (live updates, raw values)
-  // Secrets take precedence: if a name is both a secret and an env var, the secret wins
-  const envVfsMounts = createEnvironmentVfs(secretNames);
-  Object.assign(mounts, envVfsMounts);
+  // Build final VM options
   const vmCreateOptions: any = {
     sessionLabel,
     httpHooks,
@@ -222,24 +393,17 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
     vfs: { mounts },
   };
 
-  // Add sandbox image if configured (config override or env var)
   const guestImagePath = await getGuestImagePath();
   if (guestImagePath) {
     vmCreateOptions.sandbox = { imagePath: guestImagePath };
   }
-
-  // Track whether secrets VFS was actually mounted (file existed and was valid)
-  const secretsMounted = Boolean(config.secretsFile && fs.existsSync(config.secretsFile));
 
   return {
     options: vmCreateOptions,
     warnings,
     skillPaths,
     customMounts,
-    secretsMounted,
-    secretsInfo: secretsMounted && secretsPlaceholders
-      ? { filePath: config.secretsFile!, placeholders: secretsPlaceholders }
-      : undefined,
+    secretsMounted: instances.some(i => i.manifest.providesSecrets === true),
   };
 }
 
@@ -248,9 +412,8 @@ export async function buildVMOptions(ctx: VMCreationContext): Promise<BuildVMOpt
  */
 export function formatVMCreationWarnings(warnings: string[]): string {
   if (warnings.length === 0) return "";
-
   return (
-    "⚠️  Warnings:\n" +
-    warnings.map(w => `  • ${w}`).join("\n")
+    "Warnings:\n" +
+    warnings.map(w => `  - ${w}`).join("\n")
   );
 }

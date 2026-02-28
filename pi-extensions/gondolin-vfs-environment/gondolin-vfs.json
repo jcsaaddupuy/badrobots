@@ -1,0 +1,21 @@
+{
+  "name": "gondolin-vfs-environment",
+  "version": "1.0.0",
+  "gondolinVersion": "^0.5.0",
+  "displayName": "Environment Variables",
+  "description": "Mount declared host env vars as read-only files at /run/env. Only variables listed in the config file are exposed.",
+  "configNamespace": "environment-vfs",
+  "factory": "./dist/provider.js",
+  "capabilities": ["read", "list", "stat"],
+  "readonly": true,
+  "defaultMountPoint": "/run/env",
+  "configSchema": [
+    {
+      "key": "envFile",
+      "label": "Environment File",
+      "type": "string",
+      "default": "",
+      "description": "Path to host-side env config file (e.g. ~/.pi/gondolin/env). If empty, directory is empty."
+    }
+  ]
+}

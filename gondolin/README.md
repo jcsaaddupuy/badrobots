@@ -20,3 +20,4 @@ docker run --privileged -it -v $(pwd)/vm-build:/vm-build --workdir /vm-build pi-
 On the host
 ```sh
 export GONDOLIN_GUEST_DIR=$(pwd)/vm-build/pi-assets
+```

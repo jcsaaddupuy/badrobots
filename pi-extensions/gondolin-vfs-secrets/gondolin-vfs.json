@@ -1,0 +1,22 @@
+{
+  "name": "gondolin-vfs-secrets",
+  "version": "1.0.0",
+  "gondolinVersion": "^0.5.0",
+  "displayName": "Secrets File",
+  "description": "Exposes secrets from a host config file as read-only files in the VM. Values are hidden — guest sees placeholder tokens only.",
+  "configNamespace": "secrets-vfs",
+  "factory": "./dist/provider.js",
+  "capabilities": ["read", "list", "stat"],
+  "readonly": true,
+  "defaultMountPoint": "/run/secrets",
+  "providesSecrets": true,
+  "configSchema": [
+    {
+      "key": "secretsFile",
+      "label": "Secrets File",
+      "type": "string",
+      "default": "~/.pi/secrets",
+      "description": "Host file declaring secrets. Format: SECRET_NAME=value or SECRET_NAME=$ENV_VAR. Supports ~ expansion."
+    }
+  ]
+}

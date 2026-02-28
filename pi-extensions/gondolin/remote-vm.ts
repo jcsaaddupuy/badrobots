@@ -134,8 +134,8 @@ export class RemoteVM {
     const stderr = new PassThrough();
 
     // Create result promise
-    let resolve: (result: ExecResult) => void;
-    let reject: (error: Error) => void;
+    let resolve!: (result: ExecResult) => void;
+    let reject!: (error: Error) => void;
     const resultPromise = new Promise<ExecResult>((res, rej) => {
       resolve = res;
       reject = rej;

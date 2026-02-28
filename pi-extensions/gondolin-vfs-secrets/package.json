@@ -1,0 +1,21 @@
+{
+  "name": "gondolin-vfs-secrets",
+  "version": "1.0.0",
+  "description": "Secrets Directory VFS Provider for Gondolin",
+  "main": "dist/provider.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node --test dist/provider.test.js",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@earendil-works/gondolin": "^0.5.0"
+  },
+  "devDependencies": {
+    "@earendil-works/gondolin": "^0.5.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["gondolin", "vfs", "secrets"],
+  "license": "MIT"
+}

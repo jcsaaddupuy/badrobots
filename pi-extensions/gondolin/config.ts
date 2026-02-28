@@ -49,12 +49,29 @@ export interface GondolinConfig {
     };
   };
   /**
-   * Path to a secrets file on the host.
-   * Format: NAME@HOST[,HOST...][=VALUE] (one per line, # comments, blank lines ignored)
-   * When set, secrets are mounted at /run/secrets/<NAME> in the VM and injected
-   * live into HTTP headers. Values are re-read from the host on every access.
+   * Theme to apply when attached to a sandbox VM.
+   * Set to undefined to keep the current theme unchanged.
    */
-  secretsFile?: string;
+  sandboxTheme?: string;
+  /**
+   * External VFS providers (gondolin-vfs-* npm packages).
+   * Each key is the package name. The package must export a factory function
+   * and include a gondolin-vfs.json manifest.
+   *
+   * Example:
+   *   "gondolin-vfs-secrets": {
+   *     enabled: true,
+   *     mountPoint: "/run/secrets",
+   *     secretsFile: "~/.pi/secrets"
+   *   }
+   */
+  vfs: {
+    [packageName: string]: {
+      enabled: boolean;
+      mountPoint: string;
+      [key: string]: unknown;
+    };
+  };
 }
 
 /**
@@ -72,10 +89,10 @@ export const DEFAULT_CONFIG: GondolinConfig = {
     customPaths: [],
     readOnly: true,
   },
-  autoAttach: false, // Disabled by default to prevent silent VM attachment
+  autoAttach: false,
   customMounts: {},
   guestImage: {
-    imagePath: undefined, // Use GONDOLIN_GUEST_DIR from env if not set
+    imagePath: undefined,
   },
   sandbox: {
     user: "root", // Default: run as root
@@ -86,15 +103,15 @@ export const DEFAULT_CONFIG: GondolinConfig = {
   },
   environment: {},
   secrets: {},
-  secretsFile: undefined,
+  vfs: {},
 };
 
 /**
- * Get settings file path (~/.pi/agent/settings.json)
+ * Get the gondolin config file path (~/.pi/agent/gondolin.json)
  */
-function getSettingsFilePath(): string {
+function getConfigFilePath(): string {
   const homeDir = process.env.HOME || "/root";
-  return path.join(homeDir, ".pi/agent/settings.json");
+  return path.join(homeDir, ".pi/agent/gondolin.json");
 }
 
 /**
@@ -115,9 +132,11 @@ function deepMerge<T>(target: T, source: Partial<T>): T {
         typeof targetValue === "object" &&
         !Array.isArray(targetValue)
       ) {
-        result[key] = deepMerge(targetValue, sourceValue);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (result as any)[key] = deepMerge(targetValue, sourceValue);
       } else if (sourceValue !== undefined) {
-        result[key] = sourceValue;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (result as any)[key] = sourceValue;
       }
     }
   }
@@ -319,38 +338,36 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
 }
 
 /**
- * Load configuration from settings.json
+ * Load configuration from gondolin.json.
+ * On first run, migrates from the legacy settings.json gondolin key if present.
  */
 export async function getConfig(): Promise<GondolinConfig> {
   try {
-    const filePath = getSettingsFilePath();
+    const filePath = getConfigFilePath();
 
-    // Check if file exists
     if (!fs.existsSync(filePath)) {
+      // One-time migration: pull from legacy settings.json if it has a gondolin key
+      const legacyPath = path.join(path.dirname(filePath), "settings.json");
+      if (fs.existsSync(legacyPath)) {
+        try {
+          const legacy = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
+          if (legacy.gondolin && typeof legacy.gondolin === "object") {
+            const migrated = deepMerge(DEFAULT_CONFIG, legacy.gondolin) as GondolinConfig;
+            fs.writeFileSync(filePath, JSON.stringify(migrated, null, 2), "utf-8");
+            return migrated;
+          }
+        } catch { /* ignore migration errors */ }
+      }
       return DEFAULT_CONFIG;
     }
 
-    // Read and parse
     const content = fs.readFileSync(filePath, "utf-8");
-    const settings = JSON.parse(content);
+    const raw = JSON.parse(content);
+    const merged = deepMerge(DEFAULT_CONFIG, raw);
 
-    // Extract gondolin config
-    const gondolinConfig = settings.gondolin;
-
-    if (!gondolinConfig) {
-      return DEFAULT_CONFIG;
-    }
-
-    // Merge with defaults
-    const merged = deepMerge(DEFAULT_CONFIG, gondolinConfig);
-
-    // Validate
     const validation = validateConfig(merged);
     if (!validation.valid) {
-      console.warn(
-        "Gondolin configuration validation errors:",
-        validation.errors
-      );
+      console.warn("Gondolin configuration validation errors:", validation.errors);
       return DEFAULT_CONFIG;
     }
 
@@ -362,43 +379,23 @@ export async function getConfig(): Promise<GondolinConfig> {
 }
 
 /**
- * Save configuration to settings.json
+ * Save configuration to gondolin.json
  */
 export async function setConfig(config: GondolinConfig): Promise<void> {
-  // Validate first (strict validation)
   const validation = validateConfig(config);
   if (!validation.valid) {
-    throw new Error(
-      `Invalid configuration: ${validation.errors.join(", ")}`
-    );
+    throw new Error(`Invalid configuration: ${validation.errors.join(", ")}`);
   }
 
   try {
-    const filePath = getSettingsFilePath();
+    const filePath = getConfigFilePath();
 
-    // Ensure directory exists
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    // Read existing settings or create empty
-    let settings: Record<string, unknown> = {};
-    if (fs.existsSync(filePath)) {
-      try {
-        const content = fs.readFileSync(filePath, "utf-8");
-        settings = JSON.parse(content);
-      } catch (error) {
-        console.warn("Failed to parse existing settings.json, overwriting");
-        settings = {};
-      }
-    }
-
-    // Update gondolin key
-    settings.gondolin = config;
-
-    // Write back
-    fs.writeFileSync(filePath, JSON.stringify(settings, null, 2), "utf-8");
+    fs.writeFileSync(filePath, JSON.stringify(config, null, 2), "utf-8");
   } catch (error) {
     throw new Error(`Failed to save Gondolin config: ${error}`);
   }

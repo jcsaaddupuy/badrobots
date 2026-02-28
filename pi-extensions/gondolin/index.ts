@@ -26,7 +26,7 @@ import {
 import { getConfig } from "./config";
 import { buildVMOptions, formatVMCreationWarnings, type VMCreationContext } from "./vm-builder";
 import { RemoteVM } from "./remote-vm";
-import { parseSecretsFile } from "./secrets-hooks";
+// secrets-hooks removed — secret management now handled by gondolin-vfs-secrets package
 
 const PI_PREFIX = "pi:";
 const SESSION_MARKER = "◆";
@@ -77,27 +77,45 @@ const vms = new Map<string, VM | RemoteVM>();
 const vmIds = new Map<string, string>();
 const vmCustomMounts = new Map<string, { guestPath: string; hostPath: string; writable: boolean }[]>();
 const vmSecretsMounted = new Set<string>(); // VMs that have /run/secrets mounted
-const vmSecretsInfo = new Map<string, { filePath: string; placeholders: Record<string, string> }>();
 const vmConfiguredEnv = new Map<string, Record<string, string>>(); // Store configured environment variables per VM
 const remoteVms = new Set<string>(); // Track which VMs are remote
 let currentSessionId: string | undefined;
 let attachedVm: VM | RemoteVM | null = null;
 let lastContext: any = null;
 
+let previousTheme: string | undefined; // theme active before sandbox attach
+
 function updateStatusBar() {
   if (!lastContext) return;
-  
+
+  const theme = lastContext.ui.theme;
+
   if (!attachedVm) {
-    lastContext.ui.setStatus("gondolin", "Not attached to VM");
+    lastContext.ui.setStatus("gondolin", theme.fg("dim", "◌ No sandbox"));
+
+    // Revert theme if we switched on attach
+    if (previousTheme !== undefined) {
+      lastContext.ui.setTheme(previousTheme);
+      previousTheme = undefined;
+    }
   } else {
     const vmName = vmIds.get(attachedVm.id) || "unknown";
     const vmId = attachedVm.id.substring(0, 8);
     const isRemote = remoteVms.has(vmName);
     const remoteTag = isRemote ? " [remote]" : "";
-    const theme = lastContext.ui.theme;
     const indicator = theme.fg("accent", "▶");
     const status = theme.fg("dim", ` Sandbox: ${vmName}${remoteTag} [${vmId}]`);
     lastContext.ui.setStatus("gondolin", indicator + status);
+
+    // Switch to sandbox theme if configured and not already switched
+    if (previousTheme === undefined) {
+      getConfig().then(config => {
+        if (config.sandboxTheme && lastContext && previousTheme === undefined) {
+          previousTheme = lastContext.ui.theme.name ?? "default";
+          lastContext.ui.setTheme(config.sandboxTheme);
+        }
+      }).catch(() => {});
+    }
   }
 }
 
@@ -129,7 +147,6 @@ function cleanupVm(vmName: string, vmId: string): void {
   vmIds.delete(vmId);
   vmCustomMounts.delete(vmName);
   vmSecretsMounted.delete(vmName);
-  vmSecretsInfo.delete(vmName);
   vmConfiguredEnv.delete(vmName);
   remoteVms.delete(vmName);
   globalThis.gondolinVmRegistry.delete(vmName);
@@ -231,48 +248,6 @@ function toGuestPathWithExceptions(localCwd: string, localPath: string, exceptio
   return path.posix.join(WORKSPACE, posixRel);
 }
 
-/**
- * Build the per-exec env for secret injection.
- *
- * Rules:
- *  - Re-read the secrets file so newly added/removed entries take effect immediately.
- *  - For each secret currently in the file: inject NAME=placeholder (unless the
- *    caller already set that NAME in their own env — caller wins).
- *  - Secrets removed from the file are simply not added (effectively removed from env).
- *  - Merged result: callerEnv overrides secrets; secrets fill in the rest.
- */
-function buildSecretsExecEnv(
-  info: { filePath: string; placeholders: Record<string, string> },
-  callerEnv?: Record<string, string>
-): Record<string, string> {
-  let currentNames: string[];
-  try {
-    currentNames = parseSecretsFile(info.filePath).map((e) => e.name);
-  } catch {
-    // If the file is temporarily unreadable, don't inject anything
-    currentNames = [];
-  }
-
-  const merged: Record<string, string> = {};
-
-  // 1. Start with secrets placeholders for names currently in the file.
-  //    For secrets added after VM creation, lazily generate a placeholder so
-  //    the guest env var is available immediately (mirroring what secrets-hooks.ts
-  //    does in onRequestHead and SecretsDirectoryProvider._getOrCreatePlaceholder).
-  for (const name of currentNames) {
-    if (!info.placeholders[name]) {
-      info.placeholders[name] = `GONDOLIN_SECRET_${crypto.randomBytes(24).toString("hex")}`;
-    }
-    merged[name] = info.placeholders[name];
-  }
-
-  // 2. Caller env overrides (also covers "don't inject if already set")
-  if (callerEnv) {
-    Object.assign(merged, callerEnv);
-  }
-
-  return merged;
-}
 
 function createVmReadOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean): ReadOperations {
   return {
@@ -280,7 +255,7 @@ function createVmReadOps(vm: VM, localCwd: string, exceptions?: string[], custom
       const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts, hasSecrets);
       const r = await vm.exec(["/bin/cat", guestPath]);
       if (!r.ok) throw new Error(`cat failed (${r.exitCode}): ${r.stderr}`);
-      return r.stdoutBuffer;
+      return r.stdoutBuffer as Buffer;
     },
     access: async (p) => {
       const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts, hasSecrets);
@@ -325,13 +300,13 @@ function createVmEditOps(vm: VM, localCwd: string, exceptions?: string[], custom
   return { readFile: r.readFile, access: r.access, writeFile: w.writeFile };
 }
 
-function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean, secretsInfo?: { filePath: string; placeholders: Record<string, string> }, vmName?: string): BashOperations {
+function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean, vmName?: string): BashOperations {
   return {
     exec: async (command, cwd, { onData, signal, timeout, env: callerEnv }) => {
       let guestCwd: string;
       try {
         guestCwd = toGuestPathWithExceptions(localCwd, cwd, exceptions, customMounts, hasSecrets);
-      } catch (e) {
+      } catch (e: any) {
         throw e;
       }
 
@@ -345,20 +320,15 @@ function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], custom
         : undefined;
 
       try {
-        // Use configured environment variables (from VM creation), NOT host environment
-        // Secrets placeholders override configured variables if both exist
+        // Use configured environment variables (from VM creation), NOT host environment.
+        // All secret placeholders are already in the creation-time env.
         let execEnv: Record<string, string> | undefined;
-        
+
         if (vmName) {
           const configuredEnv = vmConfiguredEnv.get(vmName);
           if (configuredEnv) {
             execEnv = { ...configuredEnv };
           }
-        }
-        
-        if (secretsInfo) {
-          const secretsEnv = buildSecretsExecEnv(secretsInfo, undefined);
-          execEnv = execEnv ? { ...execEnv, ...secretsEnv } : secretsEnv;
         }
 
         const proc = vm.exec(["/bin/bash", "-lc", command], {
@@ -370,7 +340,7 @@ function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], custom
         });
 
         for await (const chunk of proc.output()) {
-          onData(chunk.data);
+          onData(chunk.data as Buffer);
         }
 
         return { exitCode: (await proc).exitCode };
@@ -393,7 +363,7 @@ function createRemoteVmReadOps(vm: RemoteVM): ReadOperations {
       const vmPath = toRemoteVmPath(p);
       const r = await vm.exec(["/bin/cat", vmPath]);
       if (!r.ok) throw new Error(`cat failed (${r.exitCode}): ${r.stderr}`);
-      return r.stdoutBuffer;
+      return r.stdoutBuffer as Buffer;
     },
     access: async (p) => {
       const vmPath = toRemoteVmPath(p);
@@ -423,21 +393,35 @@ function createRemoteVmWriteOps(vm: RemoteVM): WriteOperations {
       const r = await vm.exec(["/bin/sh", "-c", `mkdir -p ${shQuote(dir)} && echo ${shQuote(b64)} | base64 -d > ${shQuote(vmPath)}`]);
       if (!r.ok) throw new Error(`write failed (${r.exitCode}): ${r.stderr}`);
     },
+    mkdir: async (dir) => {
+      const vmPath = toRemoteVmPath(dir);
+      const r = await vm.exec(["/bin/sh", "-c", `mkdir -p ${shQuote(vmPath)}`]);
+      if (!r.ok) throw new Error(`mkdir failed (${r.exitCode}): ${r.stderr}`);
+    },
   };
 }
 
 function createRemoteVmEditOps(vm: RemoteVM): EditOperations {
   return {
-    editFile: async (p, oldText, newText) => {
+    readFile: async (p) => {
       const vmPath = toRemoteVmPath(p);
-      const r1 = await vm.exec(["/bin/cat", vmPath]);
-      if (!r1.ok) throw new Error(`read failed: ${r1.stderr}`);
-      const current = r1.stdout;
-      if (!current.includes(oldText)) throw new Error(`old text not found in ${p}`);
-      const updated = current.replace(oldText, newText);
-      const b64 = Buffer.from(updated, "utf8").toString("base64");
-      const r2 = await vm.exec(["/bin/sh", "-c", `echo ${shQuote(b64)} | base64 -d > ${shQuote(vmPath)}`]);
-      if (!r2.ok) throw new Error(`write failed: ${r2.stderr}`);
+      const r = await vm.exec(["/bin/cat", vmPath]);
+      if (!r.ok) throw new Error(`read failed (${r.exitCode}): ${r.stderr}`);
+      const buf = r.stdoutBuffer;
+      if (!Buffer.isBuffer(buf)) throw new Error(`unexpected result type`);
+      return buf;
+    },
+    access: async (p) => {
+      const vmPath = toRemoteVmPath(p);
+      const r = await vm.exec(["/bin/sh", "-c", `test -r ${shQuote(vmPath)} && test -w ${shQuote(vmPath)}`]);
+      if (!r.ok) throw new Error(`not accessible: ${p}`);
+    },
+    writeFile: async (p, content) => {
+      const vmPath = toRemoteVmPath(p);
+      const dir = path.posix.dirname(vmPath);
+      const b64 = Buffer.from(content, "utf8").toString("base64");
+      const r = await vm.exec(["/bin/sh", "-c", `mkdir -p ${shQuote(dir)} && echo ${shQuote(b64)} | base64 -d > ${shQuote(vmPath)}`]);
+      if (!r.ok) throw new Error(`write failed (${r.exitCode}): ${r.stderr}`);
     },
   };
 }
@@ -464,7 +448,7 @@ function createRemoteVmBashOps(vm: RemoteVM): BashOperations {
         });
 
         for await (const chunk of proc.output()) {
-          onData(chunk.data);
+          onData(chunk.data as Buffer);
         }
 
         return { exitCode: (await proc).exitCode };
@@ -505,7 +489,7 @@ export default function (pi: ExtensionAPI) {
         if (vms.has(defaultVmName)) {
           attachedVm = vms.get(defaultVmName)!;
           updateStatusBar();
-          ctx.ui.notify(`🔵 Auto-attached to: ${defaultVmName}`, "success");
+          ctx.ui.notify(`🔵 Auto-attached to: ${defaultVmName}`);
           return;
         }
 
@@ -538,7 +522,6 @@ export default function (pi: ExtensionAPI) {
           }
           if (buildResult.secretsMounted) {
             vmSecretsMounted.add(defaultVmName);
-            if (buildResult.secretsInfo) vmSecretsInfo.set(defaultVmName, buildResult.secretsInfo);
           }
           // Store configured environment variables for this VM
           vmConfiguredEnv.set(defaultVmName, buildResult.options.env || {});
@@ -549,9 +532,9 @@ export default function (pi: ExtensionAPI) {
 
           if (buildResult.warnings.length > 0) {
             const warningText = formatVMCreationWarnings(buildResult.warnings);
-            ctx.ui.notify(`🔵 Auto-attached to: ${defaultVmName}\n${warningText}`, "success");
+            ctx.ui.notify(`🔵 Auto-attached to: ${defaultVmName}\n${warningText}`);
           } else {
-            ctx.ui.notify(`🔵 Auto-attached to: ${defaultVmName}`, "success");
+            ctx.ui.notify(`🔵 Auto-attached to: ${defaultVmName}`);
           }
         } catch (err) {
           ctx.ui.notify(`Failed to auto-attach: ${err}`, "error");
@@ -562,8 +545,12 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // Clear status on session shutdown
-  pi.on("session_shutdown", () => {
+  // Clear status on session shutdown — revert sandbox theme first
+  pi.on("session_shutdown", (_event, ctx) => {
+    if (previousTheme !== undefined) {
+      ctx.ui.setTheme(previousTheme);
+      previousTheme = undefined;
+    }
     attachedVm = null;
     vms.clear();
     vmIds.clear();
@@ -579,10 +566,10 @@ export default function (pi: ExtensionAPI) {
     return async (id: any, params: any, signal: any, onUpdate: any, ctx: any) => {
       if (!attachedVm) {
         switch (type) {
-          case "read": return localRead.execute(id, params, signal, onUpdate, ctx);
-          case "write": return localWrite.execute(id, params, signal, onUpdate, ctx);
-          case "edit": return localEdit.execute(id, params, signal, onUpdate, ctx);
-          case "bash": return localBash.execute(id, params, signal, onUpdate, ctx);
+          case "read": return localRead.execute(id, params, signal, onUpdate);
+          case "write": return localWrite.execute(id, params, signal, onUpdate);
+          case "edit": return localEdit.execute(id, params, signal, onUpdate);
+          case "bash": return localBash.execute(id, params, signal, onUpdate);
         }
       }
       
@@ -594,16 +581,16 @@ export default function (pi: ExtensionAPI) {
         switch (type) {
           case "read":
             return createReadTool(localCwd, { operations: createRemoteVmReadOps(attachedVm) })
-              .execute(id, params, signal, onUpdate, ctx);
+              .execute(id, params, signal, onUpdate);
           case "write":
             return createWriteTool(localCwd, { operations: createRemoteVmWriteOps(attachedVm) })
-              .execute(id, params, signal, onUpdate, ctx);
+              .execute(id, params, signal, onUpdate);
           case "edit":
             return createEditTool(localCwd, { operations: createRemoteVmEditOps(attachedVm) })
-              .execute(id, params, signal, onUpdate, ctx);
+              .execute(id, params, signal, onUpdate);
           case "bash":
             return createBashTool(localCwd, { operations: createRemoteVmBashOps(attachedVm) })
-              .execute(id, params, signal, onUpdate, ctx);
+              .execute(id, params, signal, onUpdate);
         }
       }
       
@@ -611,20 +598,19 @@ export default function (pi: ExtensionAPI) {
       const exceptions = vmSkillExceptions.get(vmName);
       const customMounts = vmCustomMounts.get(vmName);
       const hasSecrets = vmSecretsMounted.has(vmName);
-      const secretsInfo = vmSecretsInfo.get(vmName);
       switch (type) {
         case "read":
           return createReadTool(localCwd, { operations: createVmReadOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets) })
-            .execute(id, params, signal, onUpdate, ctx);
+            .execute(id, params, signal, onUpdate);
         case "write":
           return createWriteTool(localCwd, { operations: createVmWriteOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets) })
-            .execute(id, params, signal, onUpdate, ctx);
+            .execute(id, params, signal, onUpdate);
         case "edit":
           return createEditTool(localCwd, { operations: createVmEditOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets) })
-            .execute(id, params, signal, onUpdate, ctx);
+            .execute(id, params, signal, onUpdate);
         case "bash":
-          return createBashTool(localCwd, { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, secretsInfo, vmName) })
-            .execute(id, params, signal, onUpdate, ctx);
+          return createBashTool(localCwd, { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, vmName) })
+            .execute(id, params, signal, onUpdate);
       }
     };
   };
@@ -646,8 +632,7 @@ export default function (pi: ExtensionAPI) {
     const exceptions = vmSkillExceptions.get(vmName);
     const customMounts = vmCustomMounts.get(vmName);
     const hasSecrets = vmSecretsMounted.has(vmName);
-    const secretsInfo = vmSecretsInfo.get(vmName);
-    return { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, secretsInfo, vmName) };
+    return { operations: createVmBashOps(attachedVm as VM, localCwd, exceptions, customMounts, hasSecrets, vmName) };
   });
 
   pi.on("before_agent_start", (event, ctx) => {
@@ -820,7 +805,6 @@ export default function (pi: ExtensionAPI) {
               }
               if (buildResult.secretsMounted) {
                 vmSecretsMounted.add(name);
-                if (buildResult.secretsInfo) vmSecretsInfo.set(name, buildResult.secretsInfo);
               }
               globalThis.gondolinVmRegistry.set(name, { name, vm });
 
@@ -831,7 +815,7 @@ export default function (pi: ExtensionAPI) {
                 `Skills: ${config.skills.enabled ? "ON" : "OFF"}${config.skills.readOnly ? " (read-only)" : ""}`
               ;
 
-              ctx.ui.notify(details, "success");
+              ctx.ui.notify(details);
             } catch (err) {
               ctx.ui.notify(`Error starting VM: ${err}`, "error");
             }
@@ -858,7 +842,7 @@ export default function (pi: ExtensionAPI) {
             if (!name || name === "default" || name === "session" || name === "all") {
               if (!name || name === "default") {
                 if (await stopVm("default")) {
-                  ctx.ui.notify("Stopped: default", "success");
+                  ctx.ui.notify("Stopped: default");
                   return;
                 }
                 const allSessions = await listSessions();
@@ -883,14 +867,14 @@ export default function (pi: ExtensionAPI) {
                   const vmName = vmIds.get(session.id);
                   if (vmName && await stopVm(vmName)) count++;
                 }
-                ctx.ui.notify(count === 0 ? "No VMs found" : `Stopped ${count} VM(s)`, count > 0 ? "success" : "info");
+                ctx.ui.notify(count === 0 ? "No VMs found" : `Stopped ${count} VM(s)`);
                 return;
               }
             }
 
             // Stop by name or ID
             if (await stopVm(name)) {
-              ctx.ui.notify(`Stopped: ${name}`, "success");
+              ctx.ui.notify(`Stopped: ${name}`);
               return;
             }
 
@@ -908,7 +892,7 @@ export default function (pi: ExtensionAPI) {
 
             const vmName = vmIds.get(session.id);
             if (vmName && await stopVm(vmName)) {
-              ctx.ui.notify(`Stopped: ${vmName}`, "success");
+              ctx.ui.notify(`Stopped: ${vmName}`);
             } else {
               ctx.ui.notify("VM not in local registry", "warning");
             }
@@ -925,7 +909,7 @@ export default function (pi: ExtensionAPI) {
             if (vms.has(name)) {
               attachedVm = vms.get(name)!;
               updateStatusBar();
-              ctx.ui.notify(`Attached to: ${name}`, "success");
+              ctx.ui.notify(`Attached to: ${name}`);
               return;
             }
 
@@ -943,7 +927,7 @@ export default function (pi: ExtensionAPI) {
                 if (vmName && vms.has(vmName)) {
                   attachedVm = vms.get(vmName)!;
                   updateStatusBar();
-                  ctx.ui.notify(`Attached to: ${vmName}`, "success");
+                  ctx.ui.notify(`Attached to: ${vmName}`);
                   return;
                 }
               }
@@ -965,7 +949,7 @@ export default function (pi: ExtensionAPI) {
 
                   attachedVm = remoteVm;
                   updateStatusBar();
-                  ctx.ui.notify(`Attached to: ${name} [remote]`, "success");
+                  ctx.ui.notify(`Attached to: ${name} [remote]`);
                   return;
                 } catch (err) {
                   ctx.ui.notify(`Failed to attach to remote VM: ${err}`, "error");
@@ -985,7 +969,7 @@ export default function (pi: ExtensionAPI) {
                 if (vmName && vms.has(vmName)) {
                   attachedVm = vms.get(vmName)!;
                   updateStatusBar();
-                  ctx.ui.notify(`Attached to: ${vmName}`, "success");
+                  ctx.ui.notify(`Attached to: ${vmName}`);
                   return;
                 }
               }
@@ -1013,7 +997,7 @@ export default function (pi: ExtensionAPI) {
             
             attachedVm = null;
             updateStatusBar();
-            ctx.ui.notify("Detached", "success");
+            ctx.ui.notify("Detached");
             break;
           }
 
@@ -1066,7 +1050,6 @@ export default function (pi: ExtensionAPI) {
               }
               if (buildResult.secretsMounted) {
                 vmSecretsMounted.add(vmName);
-                if (buildResult.secretsInfo) vmSecretsInfo.set(vmName, buildResult.secretsInfo);
               }
               // Store configured environment variables for this VM
               vmConfiguredEnv.set(vmName, buildResult.options.env || {});
@@ -1086,7 +1069,7 @@ export default function (pi: ExtensionAPI) {
                 (wasAttached ? `\nReattached: Yes` : "")
               ;
 
-              ctx.ui.notify(details, "success");
+              ctx.ui.notify(details);
             } catch (err) {
               ctx.ui.notify(`Error recreating VM: ${err}`, "error");
             }
@@ -1096,7 +1079,7 @@ export default function (pi: ExtensionAPI) {
           case "gc": {
             try {
               const cleaned = await gcSessions();
-              ctx.ui.notify(cleaned === 0 ? "No stale sessions found" : `Cleaned up ${cleaned} stale session(s)`, "success");
+              ctx.ui.notify(cleaned === 0 ? "No stale sessions found" : `Cleaned up ${cleaned} stale session(s)`);
             } catch (err) {
               ctx.ui.notify(`Error: ${err}`, "error");
             }
@@ -1130,18 +1113,14 @@ export default function (pi: ExtensionAPI) {
               }
             }
 
-            const yellow = "\x1b[93m";
-            const blue = "\x1b[94m";
-            const reset = "\x1b[0m";
-            const dim = "\x1b[2m";
-            const bright = "\x1b[1m";
+            const t = ctx.ui.theme;
 
             const piVMs: string[] = [];
             const hostVMs: string[] = [];
 
             sessions.forEach(s => {
               const age = Math.floor((Date.now() - new Date(s.createdAt).getTime()) / 1000);
-              const status = s.alive ? "✓" : "✗";
+              const alive = s.alive ? t.fg("success", "✓") : t.fg("error", "✗");
               const label = s.label || s.id.substring(0, 8);
 
               if (label.startsWith(PI_PREFIX)) {
@@ -1150,21 +1129,23 @@ export default function (pi: ExtensionAPI) {
                 const vmName = vmIds.get(s.id);
                 const isCurrent = parts[1] === currentSessionId ? ` ${SESSION_MARKER}` : "";
                 const hasSkills = vmName && vmSkillExceptions.has(vmName) ? " 📚" : "";
-                const isAttached = attachedVm && vmIds.get(s.id) === vmIds.get(attachedVm.id) ? ` ${bright}[attached]${reset}` : "";
-                const shortId = s.id.substring(0, 8);
-                piVMs.push(`    ${status} ${displayName}${isCurrent}${hasSkills}${isAttached} ${dim}[${shortId}]${reset} (${age}s)`);
+                const isAttached = attachedVm && vmIds.get(s.id) === vmIds.get(attachedVm.id)
+                  ? " " + t.fg("accent", "[attached]") : "";
+                const shortId = t.fg("dim", `[${s.id.substring(0, 8)}]`);
+                piVMs.push(`    ${alive} ${displayName}${isCurrent}${hasSkills}${isAttached} ${shortId} (${age}s)`);
               } else {
                 const vmName = vmIds.get(s.id);
                 const isRemote = vmName && remoteVms.has(vmName) ? " [remote]" : "";
-                const isAttached = attachedVm && vmIds.get(s.id) === vmIds.get(attachedVm.id) ? ` ${bright}[attached]${reset}` : "";
-                const shortId = s.id.substring(0, 8);
-                hostVMs.push(`    ${status} ${label}${isRemote}${isAttached} ${dim}[${shortId}]${reset} (${age}s)`);
+                const isAttached = attachedVm && vmIds.get(s.id) === vmIds.get(attachedVm.id)
+                  ? " " + t.fg("accent", "[attached]") : "";
+                const shortId = t.fg("dim", `[${s.id.substring(0, 8)}]`);
+                hostVMs.push(`    ${alive} ${label}${isRemote}${isAttached} ${shortId} (${age}s)`);
               }
             });
 
-            const output = [`${yellow}[Gondolin]${reset}`];
-            if (piVMs.length) output.push(`  ${blue}pi vm:${reset}`, ...piVMs);
-            if (hostVMs.length) output.push(`  ${blue}host vm:${reset}`, ...hostVMs);
+            const output = [t.fg("accent", "[Gondolin]")];
+            if (piVMs.length) output.push("  " + t.fg("dim", "pi vm:"), ...piVMs);
+            if (hostVMs.length) output.push("  " + t.fg("dim", "host vm:"), ...hostVMs);
             ctx.ui.notify(output.join("\n"), "info");
             break;
           }
