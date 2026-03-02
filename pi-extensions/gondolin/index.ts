@@ -297,7 +297,18 @@ function createVmWriteOps(vm: VM, localCwd: string, exceptions?: string[], custo
 function createVmEditOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean): EditOperations {
   const r = createVmReadOps(vm, localCwd, exceptions, customMounts, hasSecrets);
   const w = createVmWriteOps(vm, localCwd, exceptions, customMounts, hasSecrets);
-  return { readFile: r.readFile, access: r.access, writeFile: w.writeFile };
+  return {
+    readFile: r.readFile,
+    // For edit, check if the directory is writable (file may not exist yet)
+    access: async (p) => {
+      const guestPath = toGuestPathWithExceptions(localCwd, p, exceptions, customMounts, hasSecrets);
+      const dir = path.posix.dirname(guestPath);
+      const checkCmd = `test -w ${shQuote(dir)} || (test -f ${shQuote(guestPath)} && test -w ${shQuote(guestPath)})`;
+      const result = await vm.exec(["/bin/sh", "-lc", checkCmd]);
+      if (!result.ok) throw new Error(`not writable: ${p}`);
+    },
+    writeFile: w.writeFile,
+  };
 }
 
 function createVmBashOps(vm: VM, localCwd: string, exceptions?: string[], customMounts?: { guestPath: string; hostPath: string; writable: boolean }[], hasSecrets?: boolean, vmName?: string): BashOperations {
