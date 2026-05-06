@@ -93,12 +93,25 @@ for each ready task (not blocked, not done):
   4. git add <files>
   5. git commit -m "<commit field from task>"
   6. task ID done
-  7. task synchronize
-  8. move to next unblocked task
+  7. close the linked GitLab task (see below)
+  8. task synchronize
+  9. move to next unblocked task
 ```
 
 **Never commit unrelated changes together.**
 **Never push until the push task is reached.**
+
+---
+
+## Closing the linked GitLab task on done
+
+Every task has an `issue` UDA containing the GitLab task iid (e.g. `#25`).
+When marking a task done, add the `Done` label to the linked GitLab work item.
+See the **glab** skill for the exact command.
+
+> **Only add the `Done` label. Do NOT close the GitLab issue/task state unless the user explicitly asks.**
+> The `Done` label signals implementation is done; closing the state is an explicit project
+> management decision that must be requested.
 
 ---
 
