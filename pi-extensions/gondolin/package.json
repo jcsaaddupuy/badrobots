@@ -1,8 +1,0 @@
-{
-  "name": "gondolin",
-  "version": "0.1.0",
-  "type": "module",
-  "dependencies": {
-    "@earendil-works/gondolin": "^0.4.0"
-  }
-}
