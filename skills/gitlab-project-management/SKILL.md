@@ -1,6 +1,6 @@
 ---
 name: gitlab-project-management
-description: "GitLab project management via glab CLI and GraphQL: epics, issues, tasks, hierarchy"
+description: "GitLab project management via glab CLI and GraphQL: epics, issues, tasks, hierarchy, time tracking"
 ---
 
 # GitLab Project Management — AI Agent Reference
@@ -98,6 +98,12 @@ mutation {
 
 ## Tasks (child items of an Issue)
 
+> **A task title alone is never acceptable.** Every task must have a detailed description
+> that gives another agent enough context to implement it without asking questions.
+> The description must include: what files to change, exact code snippets or templates,
+> the expected outcome, and the commit message to use. Create the task first, then
+> immediately update its description via `workItemUpdate + descriptionWidget`.
+
 ```bash
 # Step 1 — get parent issue's work item global ID
 GITLAB_HOST=gitlab.example.com glab api graphql -f query='
@@ -178,17 +184,20 @@ GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation { workItemUpd
 }) { workItem { iid } errors }}'
 
 # 5. Create tasks as children of the issue
+# IMPORTANT: title alone is not enough — always follow with step 6 immediately.
 GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation { workItemCreate(input: {
   projectPath: "owner/repo"
   title: "Subtask A"
   workItemTypeId: "gid://gitlab/WorkItems::Type/5"
   hierarchyWidget: { parentId: "gid://gitlab/WorkItem/<ISSUE_ID>" }
-}) { workItem { iid } errors }}'
+}) { workItem { iid id } errors }}'
 
-# 6. Update task descriptions with implementation detail
+# 6. Immediately update each task with a DETAILED description.
+# Minimum required: files to change, what to do, code snippets, commit message.
+# A task with only a title is incomplete and must not be left that way.
 GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation { workItemUpdate(input: {
   id: "gid://gitlab/WorkItem/<TASK_ID>"
-  descriptionWidget: { description: "detailed instructions\ncode snippets\netc" }
+  descriptionWidget: { description: "## What\nChange X in file Y.\n\n## How\n```code snippet```\n\n## Commit\n`type(scope): summary. Fix for #N`" }
 }) { workItem { iid } errors }}'
 
 # 7. Set dependencies between tasks (A blocks B — B cannot start until A is done)
@@ -208,6 +217,77 @@ GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation {
 
 ---
 
+## Time Tracking (estimates + spent time)
+
+GitLab tracks two values per work item: **time estimate** (planned) and **time spent** (actual).
+Both use the same duration string format: `Nh`, `Nm`, `Ns`, `NhNm`, `1h 30m`, `90m`.
+
+### REST API — Issues and Tasks (iid-based)
+
+```bash
+# Set time estimate
+glab api "projects/:fullpath/issues/42/time_estimate" --method POST --field duration="3h"
+
+# Add time spent (cumulative — each call adds to the total)
+glab api "projects/:fullpath/issues/42/add_spent_time" --method POST --field duration="1h 30m"
+
+# Read current time stats
+glab api "projects/:fullpath/issues/42/time_stats"
+# → {"time_estimate":10800,"total_time_spent":5400,"human_time_estimate":"3h","human_total_time_spent":"1h 30m"}
+
+# Reset spent time to zero
+glab api "projects/:fullpath/issues/42/reset_spent_time" --method POST
+
+# Reset estimate to zero
+glab api "projects/:fullpath/issues/42/reset_time_estimate" --method POST
+```
+
+> Tasks created as child work items are also addressable by iid via the same `/issues/` REST path.
+
+### Workflow: report actual time from TimeWarrior
+
+See the **timewarrior** skill for how to extract seconds per issue from `timew export`.
+Convert and report in one pipeline:
+
+```bash
+# 1. Compute seconds spent on issue #43 from TimeWarrior
+SECS=$(timew export | python3 -c "
+import sys, json, re
+from datetime import datetime, timezone
+records = json.load(sys.stdin)
+total = 0
+pat = re.compile(r'issue:#?43\\b')
+for r in records:
+    if not any(pat.search(t) for t in r.get('tags',[])): continue
+    s = datetime.strptime(r['start'],'%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc)
+    e = datetime.strptime(r['end'],'%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc) if 'end' in r else datetime.now(timezone.utc)
+    total += int((e-s).total_seconds())
+print(total)
+")
+
+# 2. Convert to GitLab duration string
+DURATION=$(python3 -c "
+secs=$SECS
+h=secs//3600; m=(secs%3600)//60
+parts=[f'{h}h'] if h else []
+if m: parts.append(f'{m}m')
+print(' '.join(parts) or '0m')
+")
+
+# 3. Post to GitLab
+cd /path/to/repo
+GITLAB_HOST=gitlab.example.com glab api "projects/:fullpath/issues/43/add_spent_time" \
+  --method POST --field duration="$DURATION"
+```
+
+### When to report time
+
+- Set **estimate** when creating or starting a task (before work begins).
+- Add **spent time** when marking a task done (`task ID done`).
+- Report at the **issue level** for user-visible tracking; task-level is optional.
+
+---
+
 ## Common Errors
 
 | Error | Cause | Fix |
@@ -217,3 +297,4 @@ GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation {
 | `it's not allowed to add this type of parent item` | Issue→Issue hierarchy | Use Task type (`Type/5`) as child, not Issue |
 | Epic create fails with permission error | `projectPath` used instead of `namespacePath` | Use `namespacePath: "group"` for epics |
 | Description truncated | Used `glab api --field description=` | Use `workItemUpdate + descriptionWidget` via GraphQL |
+| Task has no description | Title created but step 6 skipped | Always update description immediately after creation |
