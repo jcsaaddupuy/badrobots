@@ -159,6 +159,7 @@ task project:myapp ls   # D = blocked by dependency
 
 - **One task = one commit.** Do not batch multiple logical changes.
 - **Set `depends:` before starting.** Never start a task whose dependencies are not done.
+- **Set dependencies in both systems.** When tasks have ordering constraints, set `depends:` in TaskWarrior AND the equivalent blocking link in your issue tracker. Keeping them in sync makes the dependency graph visible in both tools.
 - **Set `issue:` on every task** that maps to a tracker item. Use it in the commit message.
 - **`task ID start` before touching code.** `task ID done` immediately after committing.
 - **`task synchronize` after every done.** Keeps remote state current.
