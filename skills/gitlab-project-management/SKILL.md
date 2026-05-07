@@ -190,7 +190,21 @@ GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation { workItemUpd
   id: "gid://gitlab/WorkItem/<TASK_ID>"
   descriptionWidget: { description: "detailed instructions\ncode snippets\netc" }
 }) { workItem { iid } errors }}'
+
+# 7. Set dependencies between tasks (A blocks B — B cannot start until A is done)
+GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation {
+  workItemAddLinkedItems(input: {
+    id: "gid://gitlab/WorkItem/<TASK_A_ID>"
+    workItemsIds: ["gid://gitlab/WorkItem/<TASK_B_ID>"]
+    linkType: BLOCKS
+  }) { workItem { iid } errors }
+}'
+# linkType: BLOCKS | IS_BLOCKED_BY | RELATES_TO
+# Mirror in TaskWarrior: task B modify depends:A_TW_ID
 ```
+
+> **Always set dependencies** when tasks have ordering constraints. Both GitLab
+> (visible in the UI) and TaskWarrior (`depends:`) must be kept in sync.
 
 ---
 

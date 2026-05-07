@@ -78,6 +78,34 @@ mutation {
 ```
 
 > Use `\n` for newlines inside the GraphQL string. This is the only reliable way to update work item descriptions with multiline content — `glab api --field` does not handle multiline values correctly.
+> For descriptions with backticks or complex markdown, write to a temp file and use `glab api "projects/:fullpath/issues/$iid" --method PUT --field "description=@/tmp/file.md"`
+
+## Dependencies between work items
+
+GitLab work items support blocking/blocked-by relationships via the links API.
+
+```bash
+# Add a "blocks" relationship: item A blocks item B
+# Get global IDs first:
+wid_a=$(GITLAB_HOST=... glab api graphql -f query='query { project(fullPath: "owner/repo") { workItems(iids: ["A"]) { nodes { id } } }}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['project']['workItems']['nodes'][0]['id'])")
+wid_b=$(GITLAB_HOST=... glab api graphql -f query='query { project(fullPath: "owner/repo") { workItems(iids: ["B"]) { nodes { id } } }}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['project']['workItems']['nodes'][0]['id'])")
+
+# Create link (A blocks B)
+GITLAB_HOST=... glab api graphql -f query="
+mutation {
+  workItemAddLinkedItems(input: {
+    id: \"$wid_a\"
+    workItemsIds: [\"$wid_b\"]
+    linkType: BLOCKS
+  }) { workItem { iid } errors }
+}"
+
+# linkType values: BLOCKS, IS_BLOCKED_BY, RELATES_TO
+```
+
+> Dependencies between work items are displayed in the GitLab UI under the item's detail view.
+> For issues (not Tasks), the REST API also works:
+> `glab api "projects/:fullpath/issues/$iid/links" --method POST --field "target_project_id=PROJECT_ID&target_issue_iid=OTHER_IID&link_type=blocks"`
 
 
 **Hierarchy rules:** Epic → Issue → Task. Issue cannot be child of Issue.
