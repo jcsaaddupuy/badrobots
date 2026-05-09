@@ -209,11 +209,11 @@ GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation {
   }) { workItem { iid } errors }
 }'
 # linkType: BLOCKS | IS_BLOCKED_BY | RELATES_TO
-# Mirror in TaskWarrior: task B modify depends:A_TW_ID
+# Mirror in your local task manager (e.g. TaskWarrior: task B modify depends:A_ID)
 ```
 
 > **Always set dependencies** when tasks have ordering constraints. Both GitLab
-> (visible in the UI) and TaskWarrior (`depends:`) must be kept in sync.
+> (visible in the UI) and your local task manager must be kept in sync.
 
 ---
 
@@ -244,13 +244,12 @@ glab api "projects/:fullpath/issues/42/reset_time_estimate" --method POST
 
 > Tasks created as child work items are also addressable by iid via the same `/issues/` REST path.
 
-### Workflow: report actual time from TimeWarrior
+### Workflow: report actual time
 
-See the **timewarrior** skill for how to extract seconds per issue from `timew export`.
-Convert and report in one pipeline:
+Use a time tracker (e.g. TimeWarrior) to compute seconds spent, then convert and post:
 
 ```bash
-# 1. Compute seconds spent on issue #43 from TimeWarrior
+# 1. Compute seconds spent on issue #43 (example using TimeWarrior)
 SECS=$(timew export | python3 -c "
 import sys, json, re
 from datetime import datetime, timezone
@@ -283,7 +282,7 @@ GITLAB_HOST=gitlab.example.com glab api "projects/:fullpath/issues/43/add_spent_
 ### When to report time
 
 - Set **estimate** when creating or starting a task (before work begins).
-- Add **spent time** when marking a task done (`task ID done`).
+- Add **spent time** when marking a task done.
 - Report at the **issue level** for user-visible tracking; task-level is optional.
 
 ---
