@@ -1,6 +1,6 @@
 ---
 name: timewarrior
-description: "TimeWarrior time tracking: start/stop intervals, query durations by tag or issue, compute totals for GitLab time reporting"
+description: "TimeWarrior time tracking: start/stop intervals, query durations by tag or issue, compute totals for issue tracker time reporting"
 ---
 
 # TimeWarrior — AI Agent Reference
@@ -62,13 +62,14 @@ When a task is started via `task ID start`, the hook injects:
 
 ---
 
-## Compute time spent on a GitLab issue
+## Compute time spent on a tagged issue
 
 ```python
 import json, re, subprocess
 from datetime import datetime, timezone
 
 def seconds_for_issue(issue_num: int) -> int:
+    """Sum all tracked seconds for intervals tagged with issue:#N or issue:N."""
     raw = subprocess.check_output(["timew", "export"])
     records = json.loads(raw)
     total = 0
@@ -77,28 +78,31 @@ def seconds_for_issue(issue_num: int) -> int:
         if not any(pattern.search(t) for t in r.get("tags", [])):
             continue
         start = datetime.strptime(r["start"], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-        if "end" in r:
-            end = datetime.strptime(r["end"], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-        else:
-            end = datetime.now(timezone.utc)   # still running
+        end = (
+            datetime.strptime(r["end"], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+            if "end" in r
+            else datetime.now(timezone.utc)  # interval still running
+        )
         total += int((end - start).total_seconds())
     return total
 
-def to_gitlab_duration(secs: int) -> str:
-    """Convert seconds to a GitLab-accepted duration string (e.g. '1h 30m')."""
+def to_duration_string(secs: int) -> str:
+    """Convert seconds to a human duration string, e.g. '1h 30m'."""
     h = secs // 3600
     m = (secs % 3600) // 60
     s = secs % 60
     parts = []
     if h: parts.append(f"{h}h")
     if m: parts.append(f"{m}m")
-    if s and not parts: parts.append(f"{s}s")   # only show seconds if < 1 min
+    if s and not parts: parts.append(f"{s}s")  # only show seconds if < 1 min
     return " ".join(parts) or "0m"
 ```
 
 ---
 
-## Shell one-liner: seconds for an issue
+## Shell one-liner: duration for an issue
+
+Replace `43` with the issue number:
 
 ```bash
 timew export | python3 -c "
@@ -108,8 +112,7 @@ records = json.load(sys.stdin)
 total = 0
 pat = re.compile(r'issue:#?43\b')
 for r in records:
-    if not any(pat.search(t) for t in r.get('tags',[])):
-        continue
+    if not any(pat.search(t) for t in r.get('tags',[])): continue
     s = datetime.strptime(r['start'],'%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc)
     e = datetime.strptime(r['end'],'%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc) if 'end' in r else datetime.now(timezone.utc)
     total += int((e-s).total_seconds())
@@ -122,6 +125,6 @@ print(f'{h}h {m}m ({total}s)')
 
 ## Gotchas
 
-- `timew summary TAG` filters only if TAG exactly matches one of the interval's tags. For issue refs embedded inside long description tags, always use `timew export` + Python grep.
-- An interval without `end` is still running — always handle it as `now` in calculations.
-- Duration format for GitLab: `Nh`, `Nm`, `Ns`, `NhNm`, `1h 30m`, `90m` all accepted. Avoid `1.5h` (works but inconsistent).
+- `timew summary TAG` filters only if TAG **exactly** matches one of the interval's tags. Issue refs are embedded inside long description strings — always use `timew export` + Python regex, never `timew summary issue:#42`.
+- An interval without `end` is still running — always treat it as `now` in calculations.
+- Common duration string formats: `Nh`, `Nm`, `Ns`, `NhNm`, `1h 30m`, `90m`. Avoid `1.5h` — parsed inconsistently by some tools.
