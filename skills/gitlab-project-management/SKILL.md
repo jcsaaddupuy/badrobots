@@ -285,6 +285,30 @@ GITLAB_HOST=gitlab.example.com glab api "projects/:fullpath/issues/43/add_spent_
 - Add **spent time** when marking a task done.
 - Report at the **issue level** for user-visible tracking; task-level is optional.
 
+## Closing work items
+
+**Issues:** only close the state when the user explicitly asks. The default signal for completed work is adding the `Done` label.
+
+**Tasks (child work items):** close the state as soon as the task is implemented. Tasks are implementation units — closing them keeps the issue hierarchy accurate.
+
+```bash
+# Get global ID from iid
+wid=$(GITLAB_HOST=gitlab.example.com glab api graphql -f query='
+query { project(fullPath: "owner/repo") {
+  workItems(iids: ["48"]) { nodes { id } }
+}}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['project']['workItems']['nodes'][0]['id'])")
+
+# Close
+GITLAB_HOST=gitlab.example.com glab api graphql -f query="
+mutation { workItemUpdate(input: { id: \"$wid\" stateEvent: CLOSE }) {
+  workItem { iid state } errors } }"
+
+# Reopen
+GITLAB_HOST=gitlab.example.com glab api graphql -f query="
+mutation { workItemUpdate(input: { id: \"$wid\" stateEvent: REOPEN }) {
+  workItem { iid state } errors } }"
+```
+
 ---
 
 ## Common Errors
