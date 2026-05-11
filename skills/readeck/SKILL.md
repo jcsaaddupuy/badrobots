@@ -1,6 +1,6 @@
 ---
 name: readeck
-description: Bookmark manager for saving, searching, and annotating web content. Use when: (1) saving a webpage for later reference, (2) searching previously saved bookmarks, (3) adding highlights/annotations to saved content, (4) user asks to "bookmark this" or "save this article". Requires READECK_BASE_URL and READECK_API_KEY environment variables.
+description: "Bookmark manager for saving, searching, and annotating web content. Use when: (1) saving a webpage for later reference, (2) searching previously saved bookmarks, (3) adding highlights/annotations to saved content, (4) user asks to 'bookmark this' or 'save this article'. Requires READECK_BASE_URL and READECK_API_KEY environment variables."
 ---
 
 # Readeck API
@@ -84,12 +84,8 @@ The article endpoint returns HTML. Save it then strip tags for readable plain te
 curl -s "$READECK_BASE_URL/api/bookmarks/{ID}/article" \
   -H "Authorization: Bearer $READECK_API_KEY" > article.html
 
-# Plain text for reading / highlight lookup
-python3 -c "
-import re, sys
-html = open(sys.argv[1]).read()
-print(re.sub(r'<[^>]+>', '', html))
-" article.html
+# Plain text for reading
+python3 -c "import re,sys;html=open(sys.argv[1]).read();print(re.sub(r'<[^>]+>','',html))" article.html
 ```
 
 ## Get Bookmark with Highlights
@@ -120,28 +116,48 @@ curl -s "$READECK_BASE_URL/api/bookmarks/{ID}/annotations" \
 
 ## Create Highlight
 
-First, find the XPath and offsets for the text to highlight:
+Use `scripts/annotate.py` — it handles XPath detection, offset computation, and calibration automatically:
 
 ```bash
-# One-liner: find paragraph index and offset for text
-python3 -c "import sys,re,json;h=open(sys.argv[1]).read();p=[re.sub(r'<[^>]+>','',m.group(1)).strip()for m in re.finditer(r'<p[^>]*>(.*?)</p>',h,re.DOTALL)if re.sub(r'<[^>]+>','',m.group(1)).strip()];t=sys.argv[2];print(json.dumps({'found':any(t in x for x in p),'xpath':f'section[1]/div[1]/p[{next((i for i,x in enumerate(p,1)if t in x),0)}]','offsets':next(((x.find(t),x.find(t)+len(t))for x in p if t in x),(0,0))}))" article.html "text to highlight"
+# bookmark_id "text to highlight" "annotation note" color
+uv run SKILL_DIR/scripts/annotate.py <ID> "text to highlight" "why this matters" yellow
+
+# Colors: yellow (default), red, blue, green, transparent
+uv run SKILL_DIR/scripts/annotate.py <ID> "text" "note" red
+
+# List all paragraphs in the article (debug)
+uv run SKILL_DIR/scripts/annotate.py <ID> --list
 ```
 
-Then create the highlight (use `note` to store the key insight):
+### How annotate.py works
+
+1. Downloads article HTML from Readeck
+2. Extracts all `<p>` and `<blockquote>/<p>` elements, strips inner HTML tags, unescapes entities → plain text whose character offsets match Readeck's annotation engine
+3. Searches for the target text in extracted paragraphs
+4. Probes Readeck's `p[1]` to calibrate the paragraph index (Readeck's readability engine may strip nav elements, shifting indices by 1-2)
+5. Creates the highlight; verifies returned text matches; falls back if needed
+
+### Colors
+
+`yellow`, `red`, `blue`, `green`, `transparent`
+
+### Manual creation (expert)
+
+Offsets are character positions in the element text **after stripping all HTML tags and unescaping entities**:
 
 ```bash
 curl -s -X POST "$READECK_BASE_URL/api/bookmarks/{ID}/annotations" \
   -H "Authorization: Bearer $READECK_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"text": "highlighted text", "note": "why this matters", "start_selector": "section[1]/div[1]/p[N]", "start_offset": X, "end_selector": "section[1]/div[1]/p[N]", "end_offset": Y, "color": "yellow"}'
+  -d '{"text": "highlighted text", "note": "why this matters", "start_selector": "section[1]/p[N]", "start_offset": X, "end_selector": "section[1]/p[N]", "end_offset": Y, "color": "yellow"}'
 ```
 
-If the response is `{"id": null}`, try inserting `div[1]/` before `p[N]` in the selectors.
-Wikipedia-style articles typically use `section[1]/div[1]/p[N]`.
+**Gotchas:**
 
-### Colors
-
-`yellow`, `red`, `blue`, `green`, `transparent`
+- `p[N]` uses per-parent sibling counting, not global document order
+- Readeck's readability engine may strip nav paragraphs (shifting `N` by 1-2)
+- Offsets are in stripped+unescaped text, NOT raw HTML
+- `blockquote` content uses `section[1]/blockquote[1]/p[N]`
 
 ## Delete Highlight
 
