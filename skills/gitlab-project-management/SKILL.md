@@ -103,6 +103,48 @@ mutation {
 > The description must include: what files to change, exact code snippets or templates,
 > the expected outcome, and the commit message to use. Create the task first, then
 > immediately update its description via `workItemUpdate + descriptionWidget`.
+>
+> **For test tasks specifically**, the description must also include:
+> - The exact test file(s) to modify or create (path relative to repo root)
+> - Each planned test scenario as a named test function
+> - A table mapping scenario → file → function name
+> - **Correct test file placement**: tests must live in the directory that
+>   matches their traffic path or scope (e.g. unit vs integration, per-service
+>   vs end-to-end). The project's `AGENT.md` defines the exact convention.
+> A test task with only a list of scenarios and no file/function mapping is incomplete.
+
+### Detecting and flagging underspecified tasks
+
+During planning, after writing each task description, the agent must review it against
+these questions:
+
+| Question | If answer is "no" or "unclear" → flag |
+|---|---|
+| Is the exact behaviour of the change defined (not just the goal)? | `task::underspecified` |
+| Are edge cases and error paths mentioned? | `task::underspecified` |
+| Could another agent implement it from the description alone, without asking questions? | `task::underspecified` |
+| For async/concurrency/IPC tasks: is the protocol, framing, and connection lifecycle defined? | `task::underspecified` |
+| For new types/modules: are the public API signatures specified? | `task::underspecified` |
+
+If any answer is unclear, **add the `task::underspecified` label** and add a `## Open questions`
+section to the description listing exactly what needs to be resolved.
+
+A weight of **5 or 8** with design unknowns in the description is a strong signal the task
+needs more refinement before it can be started safely.
+
+```bash
+# Flag a task as underspecified
+glab api "projects/:fullpath/issues/<iid>" --method PUT \
+  --field "add_labels=task::underspecified"
+
+# Remove the flag once resolved
+glab api "projects/:fullpath/issues/<iid>" --method PUT \
+  --field "remove_labels=task::underspecified"
+```
+
+**A task carrying `task::underspecified` must never be started.** Resolve the open
+questions first — either by refining the description or by splitting the task into
+smaller, well-defined pieces.
 
 ```bash
 # Step 1 — get parent issue's work item global ID
@@ -194,6 +236,7 @@ GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation { workItemCre
 
 # 6. Immediately update each task with a DETAILED description.
 # Minimum required: files to change, what to do, code snippets, commit message.
+# For TEST tasks: also include a scenario → file → function name table.
 # A task with only a title is incomplete and must not be left that way.
 GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation { workItemUpdate(input: {
   id: "gid://gitlab/WorkItem/<TASK_ID>"
@@ -210,6 +253,13 @@ GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation {
 }'
 # linkType: BLOCKS | IS_BLOCKED_BY | RELATES_TO
 # Mirror in your local task manager (e.g. TaskWarrior: task B modify depends:A_ID)
+
+# 8. When all tasks are committed and ready to push:
+#    a. Push the branch
+#    b. Close each completed Task via workItemUpdate stateEvent: CLOSE (see "Closing work items")
+#    c. Add Done label to the parent Issue
+#    d. Open MR — always include "Closes #<issue_iid>" in the MR description
+#       so the Issue closes automatically on merge.
 ```
 
 > **Always set dependencies** when tasks have ordering constraints. Both GitLab
@@ -217,93 +267,140 @@ GITLAB_HOST=gitlab.example.com glab api graphql -f query='mutation {
 
 ---
 
-## Time Tracking (estimates + spent time)
+## Weight and time estimation
 
-GitLab tracks two values per work item: **time estimate** (planned) and **time spent** (actual).
-Both use the same duration string format: `Nh`, `Nm`, `Ns`, `NhNm`, `1h 30m`, `90m`.
+### Weight scale (Fibonacci)
 
-### REST API — Issues and Tasks (iid-based)
+Weight expresses **relative complexity**, not duration. Always use Fibonacci values:
+`1` `2` `3` `5` `8`
 
-```bash
-# Set time estimate
-glab api "projects/:fullpath/issues/42/time_estimate" --method POST --field duration="3h"
+### Assigning weight — complexity signals
 
-# Add time spent (cumulative — each call adds to the total)
-glab api "projects/:fullpath/issues/42/add_spent_time" --method POST --field duration="1h 30m"
+Score each signal and sum, then round to nearest Fibonacci:
 
-# Read current time stats
-glab api "projects/:fullpath/issues/42/time_stats"
-# → {"time_estimate":10800,"total_time_spent":5400,"human_time_estimate":"3h","human_total_time_spent":"1h 30m"}
+| Signal | Points |
+|---|---|
+| 1–2 files changed, modifying existing code | +1 |
+| 3–5 files, or introducing a new module/type | +2 |
+| 6+ files, or new binary/service | +3 |
+| New async/concurrency primitive (channel, mutex, socket) | +1 |
+| Design unclear or significant unknowns | +2 |
+| Tests are part of the task | +1 |
+| Pure config / Ansible / docs only | −1 (min 1) |
 
-# Reset spent time to zero
-glab api "projects/:fullpath/issues/42/reset_spent_time" --method POST
+Cap at 8. Round to nearest Fibonacci (1→1, 2→2, 3→3, 4→3, 5→5, 6→5, 7→8, 8→8).
 
-# Reset estimate to zero
-glab api "projects/:fullpath/issues/42/reset_time_estimate" --method POST
+### Time estimate
+
+Time estimate = `weight × velocity` where **velocity = hours per story point**.
+
+**Default velocity: `0.5 h/point`** (AI agent prior — roughly 3× faster than a human developer).
+Use this prior until calibrated from real completed-task data.
+For human developers, a typical prior is `1.5 h/point`.
+
+If a local task manager (e.g. TaskWarrior) is available and has completed task history,
+read the calibrated velocity from it before computing the estimate. See the taskwarrior
+skill for how velocity is computed and stored. If not available, use the default.
+
+```
+weight=3, velocity=0.5  →  estimate = 1h 30m  →  set "1h 30m" on the work item
+weight=5, velocity=0.5  →  estimate = 2h 30m  →  set "2h 30m" on the work item
+weight=8, velocity=0.5  →  estimate = 4h      →  set "4h" on the work item
 ```
 
-> Tasks created as child work items are also addressable by iid via the same `/issues/` REST path.
+### Setting weight and estimate at task creation
 
-### Workflow: report actual time
-
-Use a time tracker (e.g. TimeWarrior) to compute seconds spent, then convert and post:
+After creating a task and writing its description, always set weight and time estimate:
 
 ```bash
-# 1. Compute seconds spent on issue #43 (example using TimeWarrior)
-SECS=$(timew export | python3 -c "
-import sys, json, re
-from datetime import datetime, timezone
-records = json.load(sys.stdin)
-total = 0
-pat = re.compile(r'issue:#?43\\b')
-for r in records:
-    if not any(pat.search(t) for t in r.get('tags',[])): continue
-    s = datetime.strptime(r['start'],'%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc)
-    e = datetime.strptime(r['end'],'%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc) if 'end' in r else datetime.now(timezone.utc)
-    total += int((e-s).total_seconds())
-print(total)
-")
+# Set weight (integer)
+glab api "projects/:fullpath/issues/<iid>" --method PUT --field weight=<N>
 
-# 2. Convert to GitLab duration string
-DURATION=$(python3 -c "
-secs=$SECS
-h=secs//3600; m=(secs%3600)//60
-parts=[f'{h}h'] if h else []
-if m: parts.append(f'{m}m')
-print(' '.join(parts) or '0m')
-")
-
-# 3. Post to GitLab
-cd /path/to/repo
-GITLAB_HOST=gitlab.example.com glab api "projects/:fullpath/issues/43/add_spent_time" \
-  --method POST --field duration="$DURATION"
+# Set time estimate (GitLab duration string: Nh, NhNm, Nm)
+glab api "projects/:fullpath/issues/<iid>/time_estimate" --method POST --field duration="<Nh Nm>"
 ```
 
-### When to report time
+See the `glab` skill for the full time tracking API (spent time, reset, read stats).
 
-- Set **estimate** when creating or starting a task (before work begins).
-- Add **spent time** when marking a task done.
-- Report at the **issue level** for user-visible tracking; task-level is optional.
+### Reporting actual time spent on done
 
+When marking a task done, **always** report the actual time spent. This is mandatory —
+it feeds velocity calibration and makes the tracker's time stats meaningful.
+
+Compute actual time from your local task manager's start→end timestamps (see the
+taskwarrior skill for the exact computation). Then post it:
+
+```bash
+# actual duration string computed from start→end (e.g. "1h 30m", "45m", "3h")
+glab api "projects/:fullpath/issues/<iid>/add_spent_time" \
+  --method POST --field duration="<actual>"
+```
+
+If no local task manager is available, estimate from wall-clock time mentally and
+still post it. An approximate value is far better than nothing.
+
+This feeds into velocity calibration when using a local task manager.
+
+---
 ## Closing work items
 
-**Issues:** only close the state when the user explicitly asks. The default signal for completed work is adding the `Done` label.
+### Timing rules
 
-**Tasks (child work items):** close the state as soon as the task is implemented. Tasks are implementation units — closing them keeps the issue hierarchy accurate.
+| Event | Action |
+|---|---|
+| Branch **pushed** | Close each completed Task (child work item) |
+| Branch **pushed** | Add `Done` label to the parent Issue |
+| MR **merged** | Issue state closes automatically via `Closes #N` in MR description |
+
+**Never close tasks or issues before the branch is pushed.**
+
+### On push: close Tasks
+
+After `git push`, close every Task that was completed on this branch:
 
 ```bash
 # Get global ID from iid
 wid=$(GITLAB_HOST=gitlab.example.com glab api graphql -f query='
 query { project(fullPath: "owner/repo") {
-  workItems(iids: ["48"]) { nodes { id } }
+  workItems(iids: ["<task_iid>"]) { nodes { id } }
 }}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['project']['workItems']['nodes'][0]['id'])")
 
-# Close
+# Close the Task
 GITLAB_HOST=gitlab.example.com glab api graphql -f query="
 mutation { workItemUpdate(input: { id: \"$wid\" stateEvent: CLOSE }) {
   workItem { iid state } errors } }"
+```
 
-# Reopen
+### On push: add Done label to Issue
+
+Once all Tasks for an Issue are closed, add the `Done` label to the parent Issue:
+
+```bash
+glab api "projects/:fullpath/issues/<issue_iid>" \
+  --method PUT --field "add_labels=Done"
+```
+
+This signals that all implementation work is complete. The issue state remains
+open until the MR is merged.
+
+### On MR merge: Issue closes automatically
+
+When opening the MR, always include `Closes #<issue_iid>` in the MR **description**.
+GitLab will close the issue state automatically when the MR is merged into the default branch.
+
+```markdown
+## Summary
+<description of what this MR does>
+
+Closes #<issue_iid>
+```
+
+> `Closes` only works for Issues, not Tasks. Tasks are closed manually via the API on push (above).
+
+### Reopening
+
+```bash
+# Reopen a Task or Issue
 GITLAB_HOST=gitlab.example.com glab api graphql -f query="
 mutation { workItemUpdate(input: { id: \"$wid\" stateEvent: REOPEN }) {
   workItem { iid state } errors } }"
@@ -321,3 +418,5 @@ mutation { workItemUpdate(input: { id: \"$wid\" stateEvent: REOPEN }) {
 | Epic create fails with permission error | `projectPath` used instead of `namespacePath` | Use `namespacePath: "group"` for epics |
 | Description truncated | Used `glab api --field description=` | Use `workItemUpdate + descriptionWidget` via GraphQL |
 | Task has no description | Title created but step 6 skipped | Always update description immediately after creation |
+| Test task has no file/function map | Scenarios listed but no file path or function name | Add scenario → file → function table to description |
+| Task started with `task::underspecified` label | Design unknowns not resolved | Remove label only after all open questions in description are answered |

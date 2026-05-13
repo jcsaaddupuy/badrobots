@@ -31,6 +31,29 @@ glab mr approve 42
 glab mr merge 42
 ```
 
+### Opening an MR — always include `Closes #<issue_iid>`
+
+When opening an MR for a feature branch, always include `Closes #<issue_iid>` in the
+description. GitLab will automatically close the Issue when the MR is merged into the
+default branch.
+
+```bash
+glab mr create \
+  --title "feat: implement session management" \
+  --description "$(cat <<'EOF'
+## Summary
+Refactors pi-rpc-server session management to support multiple sessions.
+
+Closes #64
+EOF
+)" \
+  --target-branch develop \
+  --no-editor
+```
+
+> `Closes` only auto-closes **Issues**, not Tasks (child work items).
+> Tasks must be closed manually via the GraphQL API (see `gitlab-project-management` skill).
+
 ## Pipelines / CI
 
 ```bash
@@ -166,3 +189,33 @@ GITLAB_HOST=... glab api graphql -f query="
 mutation { workItemUpdate(input: { id: \"$wid\" stateEvent: REOPEN }) {
   workItem { iid state } errors } }"
 ```
+
+## Weight and time estimate
+
+```bash
+# Set weight on an issue or task (integer)
+glab api "projects/:fullpath/issues/42" --method PUT --field weight=3
+
+# Set time estimate
+glab api "projects/:fullpath/issues/42/time_estimate" --method POST --field duration="3h"
+glab api "projects/:fullpath/issues/42/time_estimate" --method POST --field duration="1h 30m"
+
+# Add actual time spent (cumulative — each call adds to the total)
+# Call this after every task is done. Compute duration from task start→end timestamps.
+glab api "projects/:fullpath/issues/42/add_spent_time" --method POST --field duration="2h"
+glab api "projects/:fullpath/issues/42/add_spent_time" --method POST --field duration="45m"
+
+# Read current weight and time stats
+glab api "projects/:fullpath/issues/42" | jq '{weight, time_stats}'
+glab api "projects/:fullpath/issues/42/time_stats"
+# → {"time_estimate":10800,"total_time_spent":7200,"human_time_estimate":"3h","human_total_time_spent":"2h"}
+
+# Reset time estimate or spent time
+glab api "projects/:fullpath/issues/42/reset_time_estimate" --method POST
+glab api "projects/:fullpath/issues/42/reset_spent_time" --method POST
+```
+
+> Tasks (child work items) share the same `/issues/:iid` REST path — weight and time tracking work identically.
+>
+> **Always call `add_spent_time` after completing a task.** Do not skip it even if the
+> duration is short — accurate spent time is the foundation for velocity calibration.
